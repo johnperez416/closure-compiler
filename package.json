@@ -16,7 +16,7 @@
     "glob": "^7.1.6",
     "google-closure-library": "^20200719.0.0",
     "jest": "^26.1.0",
-    "jsdom": "^16.3.0"
+    "jsdom": "^19.0.0"
   },
   "scripts": {
     "build": "clean && mvn -DskipTests",
