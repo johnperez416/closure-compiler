@@ -11,7 +11,7 @@
     "closure-compiler-npm": "google/closure-compiler-npm"
   },
   "dependencies": {
-    "chalk": "^4.1.0",
+    "chalk": "^5.0.0",
     "future-event": "^1.5.0",
     "glob": "^7.1.6",
     "google-closure-library": "^20200719.0.0",
