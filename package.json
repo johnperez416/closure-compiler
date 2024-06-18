@@ -15,8 +15,8 @@
     "future-event": "^1.5.0",
     "glob": "^7.1.6",
     "google-closure-library": "^20200719.0.0",
-    "jest": "^26.1.0",
-    "jsdom": "^16.3.0"
+    "jest": "^28.0.0",
+    "jsdom": "^17.0.0"
   },
   "scripts": {
     "build": "clean && mvn -DskipTests",
