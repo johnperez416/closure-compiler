@@ -17,10 +17,10 @@
 package com.google.javascript.jscomp;
 
 import com.google.common.collect.ImmutableList;
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
 import com.google.javascript.rhino.Node;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A compiler pass combining multiple {@link Callback} and {@link ScopedCallback} objects. This pass
@@ -45,15 +45,14 @@ final class CombinedCompilerPass implements CompilerPass, ScopedCallback {
 
   /**
    * Creates a combined compiler pass.
+   *
    * @param compiler the compiler
    */
-  CombinedCompilerPass(
-      AbstractCompiler compiler, Callback... callbacks) {
+  CombinedCompilerPass(AbstractCompiler compiler, NodeTraversal.Callback... callbacks) {
     this(compiler, ImmutableList.copyOf(callbacks));
   }
 
-  CombinedCompilerPass(
-      AbstractCompiler compiler, List<Callback> callbacks) {
+  CombinedCompilerPass(AbstractCompiler compiler, List<NodeTraversal.Callback> callbacks) {
     this.compiler = compiler;
     this.callbacks = new CallbackWrapper[callbacks.size()];
     for (int i = 0; i < callbacks.size(); i++) {
@@ -61,8 +60,8 @@ final class CombinedCompilerPass implements CompilerPass, ScopedCallback {
     }
   }
 
-  static void traverse(AbstractCompiler compiler, Node root,
-      List<Callback> callbacks) {
+  static void traverse(
+      AbstractCompiler compiler, Node root, List<NodeTraversal.Callback> callbacks) {
     if (callbacks.size() == 1) {
       NodeTraversal.traverse(compiler, root, callbacks.get(0));
     } else {
@@ -81,21 +80,21 @@ final class CombinedCompilerPass implements CompilerPass, ScopedCallback {
    */
   private static class CallbackWrapper {
     /** The callback being wrapped. Never null. */
-    private final Callback callback;
+    private final NodeTraversal.Callback callback;
     /**
-     * if (callback instanceof ScopedCallback), then scopedCallback points
-     * to an instance of ScopedCallback, otherwise scopedCallback points to null
+     * if (callback instanceof ScopedCallback), then scopedCallback points to an instance of
+     * ScopedCallback, otherwise scopedCallback points to null
      */
-    private final ScopedCallback scopedCallback;
+    private final @Nullable ScopedCallback scopedCallback;
 
     /**
-     * The node that {@link Callback#shouldTraverse(NodeTraversal, Node, Node)}
-     * returned false for. The wrapped callback doesn't receive messages until
-     * after this node is revisited in the post-order traversal.
+     * The node that {@link Callback#shouldTraverse(NodeTraversal, Node, Node)} returned false for.
+     * The wrapped callback doesn't receive messages until after this node is revisited in the
+     * post-order traversal.
      */
-    private Node waiting = null;
+    private @Nullable Node waiting = null;
 
-    private CallbackWrapper(Callback callback) {
+    private CallbackWrapper(NodeTraversal.Callback callback) {
       this.callback = callback;
       if (callback instanceof ScopedCallback) {
         scopedCallback = (ScopedCallback) callback;
@@ -140,7 +139,7 @@ final class CombinedCompilerPass implements CompilerPass, ScopedCallback {
   }
 
   @Override
-  public final void process(Node externs, Node root) {
+  public final void process(@Nullable Node externs, Node root) {
     NodeTraversal.traverse(compiler, root, this);
   }
 

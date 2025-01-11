@@ -26,29 +26,25 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
 import com.google.javascript.jscomp.AbstractCompiler;
 import com.google.javascript.jscomp.DiagnosticType;
-import com.google.javascript.jscomp.Es6ToEs3Util;
 import com.google.javascript.jscomp.JSError;
 import com.google.javascript.jscomp.NodeTraversal;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.jscomp.NodeUtil;
 import com.google.javascript.jscomp.Scope;
+import com.google.javascript.jscomp.TranspilationUtil;
 import com.google.javascript.jscomp.Var;
-import com.google.javascript.jscomp.deps.ModuleLoader;
 import com.google.javascript.jscomp.deps.ModuleLoader.ModulePath;
 import com.google.javascript.jscomp.modules.ModuleMapCreator.ModuleProcessor;
 import com.google.javascript.jscomp.modules.ModuleMetadataMap.ModuleMetadata;
 import com.google.javascript.rhino.Node;
-import com.google.javascript.rhino.Token;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Collects information related to and resolves ES imports and exports. Also performs several ES
@@ -61,7 +57,7 @@ import javax.annotation.Nullable;
  * href="https://www.ecma-international.org/ecma-262/9.0/index.html#sec-source-text-module-records">
  * Suggested reading</a>
  */
-public final class EsModuleProcessor implements Callback, ModuleProcessor {
+public final class EsModuleProcessor implements NodeTraversal.Callback, ModuleProcessor {
 
   /**
    * Error occurs when there is an ambiguous export, which can happen if there are multiple {@code
@@ -190,18 +186,18 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
    * </ul>
    */
   private final class UnresolvedModuleBuilder {
-    private final ModuleLoader.ModulePath path;
+    private final ModulePath path;
     private final Node root;
     private final Map<String, Import> importsByLocalName;
     private final List<Export> exports;
     private final Set<String> exportedNames;
 
-    UnresolvedModuleBuilder(ModuleLoader.ModulePath path, Node root) {
+    UnresolvedModuleBuilder(ModulePath path, Node root) {
       this.path = path;
       this.root = root;
-      importsByLocalName = new HashMap<>();
+      importsByLocalName = new LinkedHashMap<>();
       exports = new ArrayList<>();
-      exportedNames = new HashSet<>();
+      exportedNames = new LinkedHashSet<>();
     }
 
     void add(Import i) {
@@ -272,19 +268,19 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
   private final class UnresolvedEsModule extends UnresolvedModule {
 
     private final ModuleMetadata metadata;
-    private final ModuleLoader.ModulePath path;
+    private final ModulePath path;
     private final ImmutableMap<String, Import> importsByLocalName;
     private final ImmutableList<Export> localExports;
     private final ImmutableList<Export> indirectExports;
     private final ImmutableList<Export> starExports;
-    private ImmutableSet<String> exportedNames;
+    private @Nullable ImmutableSet<String> exportedNames;
     private final Map<String, ResolveExportResult> resolvedImports;
     private final Map<String, ResolveExportResult> resolvedExports;
-    private Module resolved;
+    private @Nullable Module resolved;
 
     private UnresolvedEsModule(
         ModuleMetadata metadata,
-        ModuleLoader.ModulePath path,
+        ModulePath path,
         ImmutableMap<String, Import> importsByLocalName,
         ImmutableList<Export> localExports,
         ImmutableList<Export> indirectExports,
@@ -296,8 +292,8 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
       this.indirectExports = indirectExports;
       this.starExports = starExports;
       exportedNames = null;
-      resolvedImports = new HashMap<>();
-      resolvedExports = new HashMap<>();
+      resolvedImports = new LinkedHashMap<>();
+      resolvedExports = new LinkedHashMap<>();
       resolved = null;
     }
 
@@ -317,7 +313,7 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
         Map<String, Binding> boundNames =
             new LinkedHashMap<>(getAllResolvedImports(moduleRequestResolver));
 
-        Map<String, Export> localNameToLocalExport = new HashMap<>();
+        Map<String, Export> localNameToLocalExport = new LinkedHashMap<>();
 
         // Only local exports that are not an anonymous default export create local bindings.
         for (Export e : localExports) {
@@ -353,7 +349,7 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
 
     /** A map from import bound name to binding. */
     Map<String, Binding> getAllResolvedImports(ModuleRequestResolver moduleRequestResolver) {
-      Map<String, Binding> imports = new HashMap<>();
+      Map<String, Binding> imports = new LinkedHashMap<>();
 
       for (String name : importsByLocalName.keySet()) {
         ResolveExportResult b = resolveImport(moduleRequestResolver, name);
@@ -381,7 +377,8 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
 
     public ResolveExportResult resolveImport(
         ModuleRequestResolver moduleRequestResolver, String name) {
-      return resolveImport(moduleRequestResolver, name, new HashSet<>(), new HashSet<>());
+      return resolveImport(
+          moduleRequestResolver, name, new LinkedHashSet<>(), new LinkedHashSet<>());
     }
 
     private ResolveExportResult resolveImportImpl(
@@ -464,7 +461,7 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
     @Override
     public ImmutableSet<String> getExportedNames(ModuleRequestResolver moduleRequestResolver) {
       if (exportedNames == null) {
-        exportedNames = getExportedNames(moduleRequestResolver, new HashSet<>());
+        exportedNames = getExportedNames(moduleRequestResolver, new LinkedHashSet<>());
       }
       return exportedNames;
     }
@@ -504,7 +501,7 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
             compiler.report(
                 JSError.make(
                     e.exportNode(),
-                    Es6ToEs3Util.CANNOT_CONVERT_YET,
+                    TranspilationUtil.CANNOT_CONVERT_YET,
                     "Wildcard export for non-ES module"));
           }
         }
@@ -671,14 +668,11 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
   }
 
   private final AbstractCompiler compiler;
-  private UnresolvedModuleBuilder currentModuleBuilder;
-  private ModuleMetadata metadata;
+  private @Nullable UnresolvedModuleBuilder currentModuleBuilder;
+  private @Nullable ModuleMetadata metadata;
 
   @Override
-  public UnresolvedModule process(
-      ModuleMetadata metadata,
-      ModulePath path,
-      Node script) {
+  public UnresolvedModule process(ModuleMetadata metadata, ModulePath path, Node script) {
     this.metadata = metadata;
     currentModuleBuilder = new UnresolvedModuleBuilder(path, script);
 
@@ -804,23 +798,25 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
   private void visitExportNameDeclaration(NodeTraversal t, Node export, Node declaration) {
     //    export var Foo;
     //    export let {a, b:[c,d]} = {};
-    List<Node> lhsNodes = NodeUtil.findLhsNodesInNode(declaration);
-    for (Node lhs : lhsNodes) {
-      checkState(lhs.isName());
-      String name = lhs.getString();
-      if (!currentModuleBuilder.add(
-          Export.builder()
-              .exportName(name)
-              .moduleRequest(null)
-              .importName(null)
-              .localName(name)
-              .modulePath(t.getInput().getPath())
-              .exportNode(export)
-              .nameNode(lhs)
-              .moduleMetadata(metadata)
-              .build())) {
-        t.report(export, DUPLICATE_EXPORT, name);
-      }
+    NodeUtil.visitLhsNodesInNode(
+        declaration, lhs -> addExportNameDeclaration(t, lhs, export, declaration));
+  }
+
+  private void addExportNameDeclaration(NodeTraversal t, Node lhs, Node export, Node declaration) {
+    checkState(lhs.isName());
+    String name = lhs.getString();
+    if (!currentModuleBuilder.add(
+        Export.builder()
+            .exportName(name)
+            .moduleRequest(null)
+            .importName(null)
+            .localName(name)
+            .modulePath(t.getInput().getPath())
+            .exportNode(export)
+            .nameNode(lhs)
+            .moduleMetadata(metadata)
+            .build())) {
+      t.report(export, DUPLICATE_EXPORT, name);
     }
   }
 
@@ -852,7 +848,7 @@ public final class EsModuleProcessor implements Callback, ModuleProcessor {
       visitExportDefault(t, export);
     } else if (export.hasTwoChildren()) {
       visitExportFrom(t, export);
-    } else if (export.getFirstChild().getToken() == Token.EXPORT_SPECS) {
+    } else if (export.getFirstChild().isExportSpecs()) {
       visitExportSpecs(t, export);
     } else {
       Node declaration = export.getFirstChild();

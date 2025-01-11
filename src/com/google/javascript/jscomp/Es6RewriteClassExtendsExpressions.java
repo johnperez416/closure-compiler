@@ -18,12 +18,15 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.javascript.jscomp.AstFactory.type;
 
+import com.google.javascript.jscomp.colors.StandardColors;
 import com.google.javascript.jscomp.deps.ModuleNames;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.jstype.JSTypeNative;
 
 /**
  * Extracts ES6 class extends expressions and creates an alias.
@@ -45,22 +48,34 @@ import com.google.javascript.rhino.Node;
  * <p>TODO(bradfordcsmith): This pass may no longer be necessary once the typechecker passes have
  * all been updated to understand ES6 classes.
  */
-public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.AbstractPostOrderCallback
-    implements CompilerPass {
+public final class Es6RewriteClassExtendsExpressions
+    implements NodeTraversal.Callback, CompilerPass {
 
   static final String CLASS_EXTENDS_VAR = "$classextends$var";
 
   private final AbstractCompiler compiler;
+  private final AstFactory astFactory;
   private int classExtendsVarCounter = 0;
   private static final FeatureSet features = FeatureSet.BARE_MINIMUM.with(Feature.CLASSES);
 
   Es6RewriteClassExtendsExpressions(AbstractCompiler compiler) {
     this.compiler = compiler;
+    this.astFactory = compiler.createAstFactory();
+  }
+
+  
+  @Override
+  public void process(Node externs, Node root) {
+    NodeTraversal.traverse(compiler, root, this);
   }
 
   @Override
-  public void process(Node externs, Node root) {
-    TranspilationPasses.processTranspile(compiler, root, features, this);
+  public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+    if (n.isScript()) {
+      FeatureSet scriptFeatures = NodeUtil.getFeatureSetOfScript(n);
+      return scriptFeatures == null || scriptFeatures.contains(features);
+    }
+    return true;
   }
 
   @Override
@@ -77,7 +92,7 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
   private boolean needsExtendsDecomposing(Node classNode) {
     checkArgument(classNode.isClass());
     Node superClassNode = classNode.getSecondChild();
-    return !superClassNode.isEmpty() & !superClassNode.isQualifiedName();
+    return !superClassNode.isEmpty() && !superClassNode.isQualifiedName();
   }
 
   /**
@@ -132,9 +147,13 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
 
     Node statement = NodeUtil.getEnclosingStatement(classNode);
     Node originalExtends = classNode.getSecondChild();
-    originalExtends.replaceWith(IR.name(name).srcref(originalExtends));
+    Node nameNode =
+        astFactory.createConstantName(name, type(originalExtends)).srcref(originalExtends);
+    originalExtends.replaceWith(nameNode);
     Node extendsAlias =
-        IR.constNode(IR.name(name), originalExtends).srcrefTreeIfMissing(originalExtends);
+        astFactory
+            .createSingleConstNameDeclaration(name, originalExtends)
+            .srcrefTreeIfMissing(originalExtends);
     extendsAlias.insertBefore(statement);
     NodeUtil.addFeatureToScript(
         NodeUtil.getEnclosingScript(classNode), Feature.CONST_DECLARATIONS, compiler);
@@ -152,8 +171,13 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
     // to
     // `(function() { return class X extends something {}; })()`
     Node functionBody = IR.block();
-    Node function = IR.function(IR.name(""), IR.paramList(), functionBody);
-    Node call = NodeUtil.newCallNode(function);
+    Node function =
+        astFactory.createFunction(
+            "",
+            IR.paramList(),
+            functionBody,
+            type(JSTypeNative.FUNCTION_TYPE, StandardColors.TOP_OBJECT));
+    Node call = astFactory.createCall(function, type(classNode));
     classNode.replaceWith(call);
     functionBody.addChildToBack(IR.returnNode(classNode));
     call.srcrefTreeIfMissing(classNode);

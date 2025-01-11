@@ -16,12 +16,17 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.javascript.jscomp.testing.JSCompCorrespondences.DESCRIPTION_EQUALITY;
 import static com.google.javascript.jscomp.testing.JSCompCorrespondences.DIAGNOSTIC_EQUALITY;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.truth.Correspondence;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.javascript.jscomp.AstValidator.TypeInfoValidation;
 import com.google.javascript.jscomp.deps.ModuleLoader.ResolutionMode;
 import com.google.javascript.jscomp.modules.ModuleMapCreator;
@@ -32,10 +37,11 @@ import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.ObjectType;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.Before;
 
-abstract class TypeCheckTestCase extends CompilerTypeTestCase {
+public abstract class TypeCheckTestCase extends CompilerTypeTestCase {
 
   private boolean reportUnknownTypes = false;
   private boolean runClosurePass = false;
@@ -109,133 +115,103 @@ abstract class TypeCheckTestCase extends CompilerTypeTestCase {
         objectType.getPropertyType(propertyName));
   }
 
-  protected void testTypes(String js) {
-    testTypes(js, (String) null);
+  final TypeTestBuilder newTest() {
+    return new TypeTestBuilder();
   }
 
-  protected void testTypes(String js, String description) {
-    testTypes(js, description, false);
-  }
+  @CheckReturnValue
+  public final class TypeTestBuilder {
+    private String source;
+    private String externs;
+    private String sourceNameExtension = "";
+    private boolean includeDefaultExterns = false;
+    private final ArrayList<DiagnosticType> diagnosticTypes = new ArrayList<>();
+    private final ArrayList<String> diagnosticDescriptions = new ArrayList<>();
+    private boolean diagnosticsAreErrors = false;
 
-  protected void testTypes(String js, DiagnosticType type) {
-    testTypes(js, type, false);
-  }
+    private TypeTestBuilder() {}
 
-  protected void testTypes(String js, String description, boolean isError) {
-    testTypesWithExterns("", js, description, isError);
-  }
+    public TypeTestBuilder addSource(String... x) {
+      checkState(this.source == null, "Can only have one source right now.");
+      this.source = lines(x);
+      return this;
+    }
 
-  protected void testTypes(String js, List<String> descriptions) {
-    testTypesWithExterns("", js, descriptions, false);
-  }
+    public TypeTestBuilder addExterns(String... x) {
+      checkState(this.externs == null, "Can only have one externs right now.");
+      this.externs = lines(x);
+      return this;
+    }
 
-  void testTypes(String js, List<String> descriptions, boolean isError) {
-    testTypesWithExterns("", js, descriptions, isError);
-  }
+    @CanIgnoreReturnValue
+    public TypeTestBuilder usingSourceNameExtension(String extension) {
+      this.sourceNameExtension = extension;
+      return this;
+    }
 
-  void testTypes(String js, DiagnosticType diagnosticType, boolean isError) {
-    testTypesWithExterns("", js, diagnosticType, isError);
-  }
+    public TypeTestBuilder includeDefaultExterns() {
+      this.includeDefaultExterns = true;
+      return this;
+    }
 
-  protected void testTypes(String js, String[] warnings) {
-    Node n = compiler.parseTestCode(js);
-    assertThat(compiler.getErrors()).isEmpty();
-    Node externsNode = IR.root();
-    // create a parent node for the extern and source blocks
-    Node root = IR.root(externsNode, IR.root(n));
+    public TypeTestBuilder diagnosticsAreErrors() {
+      this.diagnosticsAreErrors = true;
+      return this;
+    }
 
-    makeTypeCheck().processForTesting(root.getFirstChild(), root.getSecondChild());
-    assertThat(compiler.getErrors()).isEmpty();
-    checkReportedWarningsHelper(warnings);
-  }
+    public TypeTestBuilder addDiagnostic(DiagnosticType x) {
+      this.diagnosticTypes.add(x);
+      return this;
+    }
 
-  protected void testTypesWithCommonExterns(String js, List<String> descriptions) {
-    testTypesWithExterns(DEFAULT_EXTERNS, js, descriptions, false);
-  }
+    public TypeTestBuilder addDiagnostic(String x) {
+      this.diagnosticDescriptions.add(x);
+      return this;
+    }
 
-  protected void testTypesWithCommonExterns(String js, String description) {
-    testTypesWithExterns(DEFAULT_EXTERNS, js, description, false);
-  }
+    public void run() {
+      checkState(
+          this.diagnosticTypes.isEmpty() || this.diagnosticDescriptions.isEmpty(),
+          "Cannot expect both diagnostic types and diagnostic descriptions");
+      checkState(this.source != null, "Must provide source");
 
-  protected void testTypesWithCommonExterns(String js) {
-    testTypesWithExterns(DEFAULT_EXTERNS, js, (DiagnosticType) null, false);
-  }
+      String allExterns =
+          String.join(
+              "\n", this.includeDefaultExterns ? DEFAULT_EXTERNS : "", nullToEmpty(this.externs));
 
-  protected void testTypesWithExterns(
-      String externs, String js, String description, boolean isError) {
-    testTypesWithExterns(
-        externs,
-        js,
-        description != null ? ImmutableList.of(description) : ImmutableList.of(),
-        isError);
-  }
+      final List<Object> diagnostics;
+      final Correspondence<JSError, Object> correspondence;
+      if (!this.diagnosticTypes.isEmpty()) {
+        diagnostics = castAny(this.diagnosticTypes);
+        correspondence = castAny(DIAGNOSTIC_EQUALITY);
+      } else {
+        diagnostics = castAny(this.diagnosticDescriptions);
+        correspondence = castAny(DESCRIPTION_EQUALITY);
+      }
 
-  void testTypesWithExterns(String externs, String js, List<String> descriptions, boolean isError) {
-    parseAndTypeCheck(externs, js);
+      parseAndTypeCheckWithScope(allExterns, this.source, sourceNameExtension);
 
-    if (isError) {
-      assertWithMessage("Regarding errors:")
-          .that(compiler.getErrors())
-          .comparingElementsUsing(DESCRIPTION_EQUALITY)
-          .containsExactlyElementsIn(descriptions)
+      final ImmutableList<JSError> assertedErrors;
+      final ImmutableList<JSError> emptyErrors;
+      if (this.diagnosticsAreErrors) {
+        assertedErrors = compiler.getErrors();
+        emptyErrors = compiler.getWarnings();
+      } else {
+        assertedErrors = compiler.getWarnings();
+        emptyErrors = compiler.getErrors();
+      }
+
+      assertThat(assertedErrors)
+          .comparingElementsUsing(correspondence)
+          .containsExactlyElementsIn(diagnostics)
           .inOrder();
-      assertWithMessage("Regarding warnings").that(compiler.getWarnings()).isEmpty();
-    } else {
-      assertWithMessage("Regarding warnings:")
-          .that(compiler.getWarnings())
-          .comparingElementsUsing(DESCRIPTION_EQUALITY)
-          .containsExactlyElementsIn(descriptions)
-          .inOrder();
-      assertWithMessage("Regarding errors:").that(compiler.getErrors()).isEmpty();
+      assertThat(emptyErrors).isEmpty();
     }
   }
 
-  void testTypesWithExterns(
-      String externs, String js, DiagnosticType diagnosticType, boolean isError) {
-    parseAndTypeCheck(externs, js);
-
-    ImmutableList<DiagnosticType> expectedTypes =
-        (diagnosticType == null) ? ImmutableList.of() : ImmutableList.of(diagnosticType);
-
-    if (isError) {
-      assertWithMessage("Regarding errors:")
-          .that(compiler.getErrors())
-          .comparingElementsUsing(DIAGNOSTIC_EQUALITY)
-          .containsExactlyElementsIn(expectedTypes)
-          .inOrder();
-      assertWithMessage("Regarding warnings").that(compiler.getWarnings()).isEmpty();
-    } else {
-      assertWithMessage("Regarding warnings:")
-          .that(compiler.getWarnings())
-          .comparingElementsUsing(DIAGNOSTIC_EQUALITY)
-          .containsExactlyElementsIn(expectedTypes)
-          .inOrder();
-      assertWithMessage("Regarding errors:").that(compiler.getErrors()).isEmpty();
-    }
-  }
-
-  protected void testTypesWithExterns(String externs, String js, String description) {
-    testTypesWithExterns(externs, js, description, false);
-  }
-
-  protected void testTypesWithExterns(String externs, String js, DiagnosticType diagnosticType) {
-    testTypesWithExterns(externs, js, diagnosticType, false);
-  }
-
-  protected void testTypesWithExterns(String externs, String js) {
-    testTypesWithExterns(externs, js, (String) null, false);
-  }
-
-  protected void testTypesWithExtraExterns(String externs, String js) {
-    testTypesWithExterns(DEFAULT_EXTERNS + "\n" + externs, js, (String) null, false);
-  }
-
-  protected void testTypesWithExtraExterns(String externs, String js, String description) {
-    testTypesWithExterns(DEFAULT_EXTERNS + "\n" + externs, js, description, false);
-  }
-
-  protected void testTypesWithExtraExterns(String externs, String js, DiagnosticType diag) {
-    testTypesWithExterns(DEFAULT_EXTERNS + "\n" + externs, js, diag, false);
+  @SuppressWarnings({"unchecked", "TypeParameterUnusedInFormals"})
+  private static <T> T castAny(Object x) {
+    return (T) x;
   }
 
   /** Parses and type checks the JavaScript code. */
@@ -244,7 +220,7 @@ abstract class TypeCheckTestCase extends CompilerTypeTestCase {
   }
 
   protected Node parseAndTypeCheck(String externs, String js) {
-    return parseAndTypeCheckWithScope(externs, js).root;
+    return parseAndTypeCheckWithScope(externs, js, "").root;
   }
 
   /**
@@ -252,25 +228,32 @@ abstract class TypeCheckTestCase extends CompilerTypeTestCase {
    * checking.
    */
   protected TypeCheckResult parseAndTypeCheckWithScope(String js) {
-    return parseAndTypeCheckWithScope("", js);
+    return parseAndTypeCheckWithScope("", js, "");
   }
 
+  /**
+   * Parses and type checks the JavaScript code and returns the TypedScope used whilst type
+   * checking.
+   */
   protected TypeCheckResult parseAndTypeCheckWithScope(String externs, String js) {
+    return parseAndTypeCheckWithScope(externs, js, "");
+  }
+
+  @CanIgnoreReturnValue
+  protected TypeCheckResult parseAndTypeCheckWithScope(
+      String externs, String js, String sourceNameExtension) {
+    compiler.getOptions().setClosurePass(runClosurePass);
     compiler.init(
         ImmutableList.of(SourceFile.fromCode("[externs]", externs)),
-        ImmutableList.of(SourceFile.fromCode("[testcode]", js)),
+        ImmutableList.of(SourceFile.fromCode("[testcode]" + sourceNameExtension, js)),
         compiler.getOptions());
-    compiler.setFeatureSet(compiler.getFeatureSet());
-    compiler.getOptions().setClosurePass(runClosurePass);
+    compiler.parse();
 
-    Node jsNode = IR.root(compiler.getInput(new InputId("[testcode]")).getAstRoot(compiler));
-    Node externsNode = IR.root(compiler.getInput(new InputId("[externs]")).getAstRoot(compiler));
-    Node externAndJsRoot = IR.root(externsNode, jsNode);
-    compiler.jsRoot = jsNode;
-    compiler.externsRoot = externsNode;
-    compiler.externAndJsRoot = externAndJsRoot;
+    Node jsNode = compiler.getJsRoot();
+    Node externsNode = compiler.getExternsRoot();
     new GatherModuleMetadata(compiler, false, ResolutionMode.BROWSER).process(externsNode, jsNode);
     new ModuleMapCreator(compiler, compiler.getModuleMetadataMap()).process(externsNode, jsNode);
+    new InferConsts(compiler).process(externsNode, jsNode);
 
     assertWithMessage("Regarding errors:").that(compiler.getErrors()).isEmpty();
 
@@ -283,7 +266,9 @@ abstract class TypeCheckTestCase extends CompilerTypeTestCase {
     return new TypeCheckResult(jsNode.getFirstChild(), s);
   }
 
-  /** @param n A valid statement node, SCRIPT, or ROOT node. */
+  /**
+   * @param n A valid statement node, SCRIPT, or ROOT node.
+   */
   protected Node typeCheck(Node n) {
     Node jsRoot;
     if (n.isRoot()) {

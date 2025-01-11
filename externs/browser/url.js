@@ -122,8 +122,8 @@ URLSearchParams.prototype.values = function() {};
 /**
  * @see https://url.spec.whatwg.org
  * @constructor
- * @param {string} url
- * @param {(string|!URL)=} base
+ * @param {!URL|string} url
+ * @param {(!URL|string)=} base
  */
 function URL(url, base) {}
 
@@ -187,8 +187,16 @@ URL.domainToUnicode = function(domain) {};
 URL.createObjectURL = function(obj) {};
 
 /**
+ * @see https://url.spec.whatwg.org
+ * @param {!URL|string} url
+ * @param {(!URL|string)=} base
+ * @return {boolean}
+ */
+URL.canParse = function(url, base) {};
+
+/**
  * @see http://www.w3.org/TR/FileAPI/#dfn-revokeObjectURL
- * @param {string} url
+ * @param {!URL|string} url
  * @return {undefined}
  */
 URL.revokeObjectURL = function(url) {};

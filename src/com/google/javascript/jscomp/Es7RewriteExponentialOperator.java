@@ -19,12 +19,12 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.javascript.jscomp.AstFactory.type;
 
+import com.google.common.base.Suppliers;
+import com.google.javascript.jscomp.colors.StandardColors;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.Node;
-import com.google.javascript.rhino.jstype.JSType;
-import com.google.javascript.rhino.jstype.JSTypeNative;
-import com.google.javascript.rhino.jstype.JSTypeRegistry;
+import java.util.function.Supplier;
 
 /** Replaces the ES7 `**` and `**=` operators to calls to `Math.pow`. */
 public final class Es7RewriteExponentialOperator implements NodeTraversal.Callback, CompilerPass {
@@ -40,42 +40,26 @@ public final class Es7RewriteExponentialOperator implements NodeTraversal.Callba
   private final AbstractCompiler compiler;
   private final AstFactory astFactory;
   private final UniqueIdSupplier uniqueIdSupplier;
-  private final Node mathPowCall; // This node should only ever be cloned, not directly inserted.
-
-  private final JSType numberType;
-  private final JSType mathType;
-  private final JSType mathPowType;
+  // This node should only ever be cloned, not directly inserted.
+  private final Supplier<Node> mathPowCall = Suppliers.memoize(this::createMathPowCall);
 
   public Es7RewriteExponentialOperator(AbstractCompiler compiler) {
     this.compiler = compiler;
     this.astFactory = compiler.createAstFactory();
     this.uniqueIdSupplier = compiler.getUniqueIdSupplier();
-
-    if (compiler.hasTypeCheckingRun()) {
-      JSTypeRegistry registry = compiler.getTypeRegistry();
-      this.numberType = registry.getNativeType(JSTypeNative.NUMBER_TYPE);
-      // TODO(nickreid): Get the actual type of the `Math` object here in case optimizations care.
-      this.mathType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
-      this.mathPowType = registry.createFunctionType(numberType, numberType, numberType);
-    } else {
-      this.numberType = null;
-      this.mathType = null;
-      this.mathPowType = null;
-    }
-
-    this.mathPowCall = createMathPowCall();
   }
 
   @Override
   public void process(Node externs, Node root) {
     NodeTraversal.traverse(compiler, root, this);
-    TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, Feature.EXPONENT_OP);
+    TranspilationPasses.maybeMarkFeatureAsTranspiledAway(compiler, root, Feature.EXPONENT_OP);
   }
 
   @Override
   public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
     if (n.isScript()) {
       FeatureSet scriptFeatures = NodeUtil.getFeatureSetOfScript(n);
+      // Runs only if features exist in the script
       return scriptFeatures == null || scriptFeatures.contains(Feature.EXPONENT_OP);
     }
     return true;
@@ -100,7 +84,7 @@ public final class Es7RewriteExponentialOperator implements NodeTraversal.Callba
   }
 
   private void visitExponentiationOperator(Node operator) {
-    Node callClone = mathPowCall.cloneTree();
+    Node callClone = mathPowCall.get().cloneTree();
     callClone.addChildToBack(operator.removeFirstChild()); // Base argument.
     callClone.addChildToBack(operator.removeFirstChild()); // Exponent argument.
 
@@ -133,7 +117,7 @@ public final class Es7RewriteExponentialOperator implements NodeTraversal.Callba
     // handle name case
     // e.g. convert `name **= value` to
     // `name = Math.pow(name, value)`
-    Node callClone = mathPowCall.cloneTree();
+    Node callClone = mathPowCall.get().cloneTree();
     callClone.addChildToBack(left.cloneTree()); // Base argument.
     callClone.addChildToBack(operator.removeFirstChild()); // Exponent argument.
 
@@ -211,7 +195,7 @@ public final class Es7RewriteExponentialOperator implements NodeTraversal.Callba
               .copyTypeFrom(left)
               .srcref(left); // (tmp = someExpression)[tmpIndex = indexExpression]
     }
-    Node callClone = mathPowCall.cloneTree();
+    Node callClone = mathPowCall.get().cloneTree();
     callClone.addChildToBack(tempPropOrElem.cloneTree()); // Base argument.
     callClone.addChildToBack(operator.removeFirstChild()); // Exponent argument.
 
@@ -221,19 +205,16 @@ public final class Es7RewriteExponentialOperator implements NodeTraversal.Callba
   }
 
   private Node createMathPowCall() {
-    return astFactory
-        .createCall(
-            astFactory
-                .createGetProp(astFactory.createName("Math", mathType), "pow")
-                .setJSType(mathPowType))
-        .setJSType(numberType);
+    return astFactory.createCall(
+        astFactory.createQName(compiler.getTranspilationNamespace(), "Math.pow"),
+        type(StandardColors.NUMBER));
   }
 
   // Report an error if the `**` getting transpiled to `Math.pow()`is of BIGINT type
   private boolean checkOperatorType(Node operator) {
     checkArgument(operator.isExponent() || operator.isAssignExponent(), operator);
     if (compiler.hasTypeCheckingRun()) {
-      if (operator.getJSType().isOnlyBigInt()) {
+      if (operator.getColor().equals(StandardColors.BIGINT)) {
         compiler.report(JSError.make(operator, TRANSPILE_EXPONENT_USING_BIGINT));
         return false;
       }

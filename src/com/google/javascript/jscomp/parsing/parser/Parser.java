@@ -19,6 +19,7 @@ package com.google.javascript.jscomp.parsing.parser;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.collect.ImmutableList;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
@@ -113,7 +114,7 @@ import com.google.javascript.jscomp.parsing.parser.util.SourcePosition;
 import com.google.javascript.jscomp.parsing.parser.util.SourceRange;
 import java.util.ArrayDeque;
 import java.util.List;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Parses a javascript file.
@@ -179,28 +180,14 @@ public class Parser {
   private final ArrayDeque<FunctionFlavor> functionContextStack = new ArrayDeque<>();
   private FeatureSet features = FeatureSet.BARE_MINIMUM;
   private SourcePosition lastSourcePosition;
-  @Nullable private String sourceMapURL;
-
-  public Parser(
-      Config config,
-      ErrorReporter errorReporter,
-      SourceFile source,
-      int offset,
-      boolean initialGeneratorContext) {
-    this.config = config;
-    this.errorReporter = errorReporter;
-    this.scanner = new Scanner(errorReporter, commentRecorder, source, offset);
-    this.functionContextStack.addLast(
-        initialGeneratorContext ? FunctionFlavor.GENERATOR : FunctionFlavor.NORMAL);
-    lastSourcePosition = scanner.getPosition();
-  }
-
-  public Parser(Config config, ErrorReporter errorReporter, SourceFile source, int offset) {
-    this(config, errorReporter, source, offset, false);
-  }
+  private @Nullable String sourceMapURL;
 
   public Parser(Config config, ErrorReporter errorReporter, SourceFile source) {
-    this(config, errorReporter, source, 0);
+    this.config = config;
+    this.errorReporter = errorReporter;
+    this.scanner = new Scanner(errorReporter, commentRecorder, source, 0);
+    this.functionContextStack.addLast(FunctionFlavor.NORMAL);
+    lastSourcePosition = scanner.getPosition();
   }
 
   public static class Config {
@@ -217,7 +204,7 @@ public class Parser {
     private final boolean warnTrailingCommas;
 
     public Config() {
-      this(Mode.ES8_OR_GREATER, /* isStrictMode */ false);
+      this(Mode.ES8_OR_GREATER, /* isStrictMode= */ false);
     }
 
     public Config(Mode mode, boolean isStrictMode) {
@@ -266,8 +253,7 @@ public class Parser {
   }
 
   /** Returns the url provided by the sourceMappingURL if any was found. */
-  @Nullable
-  public String getSourceMapURL() {
+  public @Nullable String getSourceMapURL() {
     return sourceMapURL;
   }
 
@@ -277,9 +263,11 @@ public class Parser {
   }
 
   // 14 Program
-  public ProgramTree parseProgram() {
+  public @Nullable ProgramTree parseProgram() {
     try {
-      SourcePosition start = getTreeStartLocation();
+      // Set the start location at the beginning of the file rather than the beginning of the first
+      // token.  This ensures that it accounts for leading comments.
+      SourcePosition start = lastSourcePosition;
       ImmutableList<ParseTree> sourceElements = parseGlobalSourceElements();
       eat(TokenType.END_OF_FILE);
       return new ProgramTree(getTreeLocation(start), sourceElements, commentRecorder.getComments());
@@ -386,8 +374,7 @@ public class Parser {
 
   //  ImportSpecifierSet ::= '{' (ImportSpecifier (',' ImportSpecifier)* (,)? )?  '}'
   private ImmutableList<ParseTree> parseImportSpecifierSet() {
-    ImmutableList.Builder<ParseTree> elements;
-    elements = ImmutableList.builder();
+    ImmutableList.Builder<ParseTree> elements = ImmutableList.builder();
     eat(TokenType.OPEN_CURLY);
     while (peekIdOrKeyword()) {
       elements.add(parseImportSpecifier());
@@ -515,8 +502,7 @@ public class Parser {
 
   //  ExportSpecifierSet ::= '{' (ExportSpecifier (',' ExportSpecifier)* (,)? )?  '}'
   private ImmutableList<ParseTree> parseExportSpecifierSet() {
-    ImmutableList.Builder<ParseTree> elements;
-    elements = ImmutableList.builder();
+    ImmutableList.Builder<ParseTree> elements = ImmutableList.builder();
     eat(TokenType.OPEN_CURLY);
     while (peekIdOrKeyword()) {
       elements.add(parseExportSpecifier());
@@ -563,7 +549,7 @@ public class Parser {
     ParseTree superClass = null;
     if (peek(TokenType.EXTENDS)) {
       eat(TokenType.EXTENDS);
-      superClass = parseExpression();
+      superClass = parseLeftHandSideExpression();
     }
 
     eat(TokenType.OPEN_CURLY);
@@ -619,7 +605,7 @@ public class Parser {
       this.start = start;
     }
 
-    void setName(IdentifierToken name) {
+    void setName(@Nullable IdentifierToken name) {
       this.name = name;
     }
 
@@ -627,7 +613,7 @@ public class Parser {
       return name;
     }
 
-    void setNameExpr(ParseTree nameExpr) {
+    void setNameExpr(@Nullable ParseTree nameExpr) {
       this.nameExpr = nameExpr;
     }
 
@@ -668,6 +654,8 @@ public class Parser {
       return parseSetAccessor(partialElement);
     } else if (peekAsyncMethod()) {
       return parseAsyncMethod(partialElement);
+    } else if (peekClassStaticInitializerBlock()) {
+      return parseClassStaticInitializerBlock();
     } else {
       return parseClassMemberDeclaration(partialElement);
     }
@@ -678,6 +666,10 @@ public class Parser {
         && !peekImplicitSemiColon(1)
         && (peekPropertyNameOrComputedProp(1)
             || (peek(1, TokenType.STAR) && peekPropertyNameOrComputedProp(2)));
+  }
+
+  private boolean peekClassStaticInitializerBlock() {
+    return peek(TokenType.STATIC) && peek(1, TokenType.OPEN_CURLY);
   }
 
   private PartialClassElement parseClassElementName(PartialClassElement partial) {
@@ -756,7 +748,6 @@ public class Parser {
   private ParseTree parseClassMemberDeclaration(PartialClassElement partial) {
     boolean isGenerator = eatOpt(TokenType.STAR) != null;
     partial = parseClassElementName(partial);
-
     if (peekType(0) == TokenType.OPEN_PAREN) {
       return parseMethodDefinition(partial, isGenerator);
     } else {
@@ -821,6 +812,11 @@ public class Parser {
       return new ComputedPropertyMethodTree(
           getTreeLocation(nameExpr.getStart()), nameExpr, function);
     }
+  }
+
+  private ParseTree parseClassStaticInitializerBlock() {
+    eat(TokenType.STATIC);
+    return parseBlock();
   }
 
   private void parseFunctionTail(
@@ -995,7 +991,6 @@ public class Parser {
           commaPositions.add(getTreeEndLocation());
         }
         if (peek(TokenType.CLOSE_PAREN)) {
-          recordFeatureUsed(Feature.TRAILING_COMMA_IN_PARAM_LIST);
           if (!config.atLeast8) {
             reportError(comma, "Invalid trailing comma in formal parameter list");
           }
@@ -1199,7 +1194,8 @@ public class Parser {
     return parseVariableDeclarationList(Expression.NO_IN);
   }
 
-  private VariableDeclarationListTree parseVariableDeclarationList(Expression expressionIn) {
+  private @Nullable VariableDeclarationListTree parseVariableDeclarationList(
+      Expression expressionIn) {
     SourcePosition start = getTreeStartLocation();
     TokenType token = peekType();
 
@@ -1421,6 +1417,10 @@ public class Parser {
   }
 
   private ParseTree parseForAwaitOfStatement(SourcePosition start, ParseTree initializer) {
+    // TODO(b/128938049): when top-level await is supported, this shouldn't be a parse error.
+    if (functionContextStack.isEmpty() || !functionContextStack.peekLast().isAsynchronous) {
+      reportError("'for-await-of' used in a non-async function context");
+    }
     eatPredefinedString(PredefinedName.OF);
     ParseTree collection = parseExpression();
     eat(TokenType.CLOSE_PAREN);
@@ -1458,7 +1458,7 @@ public class Parser {
   }
 
   // 12.6.3 The for Statement
-  private ParseTree parseForStatement(SourcePosition start, ParseTree initializer) {
+  private ParseTree parseForStatement(SourcePosition start, @Nullable ParseTree initializer) {
     if (initializer == null) {
       initializer = new NullTree(new SourceRange(getTreeEndLocation(), getTreeStartLocation()));
     }
@@ -1633,7 +1633,6 @@ public class Parser {
 
   private CatchTree parseCatch() {
     SourcePosition start = getTreeStartLocation();
-    CatchTree catchBlock;
     eat(TokenType.CATCH);
 
     ParseTree exception =
@@ -1652,8 +1651,7 @@ public class Parser {
     }
 
     BlockTree catchBody = parseBlock();
-    catchBlock = new CatchTree(getTreeLocation(start), exception, catchBody);
-    return catchBlock;
+    return new CatchTree(getTreeLocation(start), exception, catchBody);
   }
 
   private FinallyTree parseFinallyBlock() {
@@ -1780,7 +1778,7 @@ public class Parser {
    * @param operand A non-null value would represent the callsite
    * @return The template literal expression
    */
-  private TemplateLiteralExpressionTree parseTemplateLiteral(ParseTree operand) {
+  private TemplateLiteralExpressionTree parseTemplateLiteral(@Nullable ParseTree operand) {
     SourcePosition start = operand == null ? getTreeStartLocation() : operand.location.start;
     Token token = nextToken();
     if (!(token instanceof TemplateLiteralToken)) {
@@ -1827,6 +1825,7 @@ public class Parser {
   private ParseTree parseRegularExpressionLiteral() {
     SourcePosition start = getTreeStartLocation();
     LiteralToken literal = nextRegularExpressionLiteralToken();
+    recordFeatureUsed(Feature.REGEXP_SYNTAX);
     return new LiteralExpressionTree(getTreeLocation(start), literal);
   }
 
@@ -2079,7 +2078,7 @@ public class Parser {
     return peekPredefinedString(0, string);
   }
 
-  private Token eatPredefinedString(String string) {
+  private @Nullable Token eatPredefinedString(String string) {
     Token token = eatId();
     if (token == null || !token.asIdentifier().value.equals(string)) {
       reportExpectedError(token, string);
@@ -2353,6 +2352,14 @@ public class Parser {
     }
 
     if (peekAssignmentOperator()) {
+      if (!peek(TokenType.EQUAL)) {
+        // not the vanilla assignment operator `=`, but a special equals operator (`+=`, `-=`,
+        // `**=`, etc)
+        if (!left.isValidNonVanillaAssignmentTarget()) {
+          reportError("invalid assignment target");
+          return new MissingPrimaryExpressionTree(getTreeLocation(getTreeStartLocation()));
+        }
+      }
       left = transformLeftHandSideExpression(left);
       if (!left.isValidAssignmentTarget()) {
         reportError("invalid assignment target");
@@ -2889,9 +2896,6 @@ public class Parser {
 
   private ParseTree parseAwaitExpression() {
     SourcePosition start = getTreeStartLocation();
-    if (functionContextStack.isEmpty() || !functionContextStack.peekLast().isAsynchronous) {
-      reportError("'await' used in a non-async function context");
-    }
     eatPredefinedString(AWAIT);
     ParseTree expression = parseUnaryExpression();
     return new AwaitExpressionTree(getTreeLocation(start), expression);
@@ -3236,7 +3240,6 @@ public class Parser {
           commaPositions.add(comma.getStart());
         }
         if (peek(TokenType.CLOSE_PAREN)) {
-          recordFeatureUsed(Feature.TRAILING_COMMA_IN_PARAM_LIST);
           if (!config.atLeast8) {
             reportError(comma, "Invalid trailing comma in arguments list");
           }
@@ -3517,10 +3520,9 @@ public class Parser {
    * Consumes the next token if it is of the expected type. Otherwise returns null. Never reports
    * errors.
    *
-   * @param expectedTokenType
    * @return The consumed token, or null if the next token is not of the expected type.
    */
-  private Token eatOpt(TokenType expectedTokenType) {
+  private @Nullable Token eatOpt(TokenType expectedTokenType) {
     if (peek(expectedTokenType)) {
       return eat(expectedTokenType);
     }
@@ -3536,7 +3538,9 @@ public class Parser {
     return peekId(0);
   }
 
-  /** @return whether the next token is an identifier. */
+  /**
+   * @return whether the next token is an identifier.
+   */
   private boolean peekId(int index) {
     TokenType type = peekType(index);
     // There is one special case to handle here: outside of strict-mode code, strict-mode keywords
@@ -3554,7 +3558,7 @@ public class Parser {
   }
 
   /** Shorthand for eatOpt(TokenType.IDENTIFIER) */
-  private IdentifierToken eatIdOpt() {
+  private @Nullable IdentifierToken eatIdOpt() {
     return (peekId()) ? eatIdOrKeywordAsId() : null;
   }
 
@@ -3563,7 +3567,7 @@ public class Parser {
    *
    * @see "http://www.ecma-international.org/ecma-262/5.1/#sec-7.6"
    */
-  private IdentifierToken eatId() {
+  private @Nullable IdentifierToken eatId() {
     if (peekId()) {
       return eatIdOrKeywordAsId();
     } else {
@@ -3595,7 +3599,7 @@ public class Parser {
    *
    * @see "http://www.ecma-international.org/ecma-262/5.1/#sec-7.6"
    */
-  private IdentifierToken eatIdOrKeywordAsId() {
+  private @Nullable IdentifierToken eatIdOrKeywordAsId() {
     Token token = nextToken();
     if (token.type == TokenType.IDENTIFIER) {
       return (IdentifierToken) token;
@@ -3611,10 +3615,9 @@ public class Parser {
    * Consumes the next token. If the consumed token is not of the expected type then report an error
    * and return null. Otherwise return the consumed token.
    *
-   * @param expectedTokenType
    * @return The consumed token, or null if the next token is not of the expected type.
    */
-  private Token eat(TokenType expectedTokenType) {
+  private @Nullable Token eat(TokenType expectedTokenType) {
     Token token = nextToken();
     if (token.type != expectedTokenType) {
       reportExpectedError(token, expectedTokenType);
@@ -3629,7 +3632,7 @@ public class Parser {
    * @param token The location to report the message at.
    * @param expected The thing that was expected.
    */
-  private void reportExpectedError(Token token, Object expected) {
+  private void reportExpectedError(@Nullable Token token, Object expected) {
     reportError(token, "'%s' expected", expected);
   }
 
@@ -3765,11 +3768,21 @@ public class Parser {
   }
 
   private void reportTemplateErrorIfPresent(TemplateLiteralToken templateToken) {
-    if (templateToken.errorMessage != null) {
-      reportError(templateToken.errorPosition, "%s", templateToken.errorMessage);
+    if (templateToken.errorMessage == null) {
+      return;
     }
+    switch (templateToken.errorLevel) {
+      case WARNING:
+        errorReporter.reportWarning(templateToken.errorPosition, "%s", templateToken.errorMessage);
+        return;
+      case ERROR:
+        reportError(templateToken.errorPosition, "%s", templateToken.errorMessage);
+        return;
+    }
+    throw new AssertionError();
   }
 
+  @CanIgnoreReturnValue
   private Parser recordFeatureUsed(Feature feature) {
     features = features.with(feature);
     return this;

@@ -19,6 +19,7 @@ package com.google.javascript.jscomp.parsing.parser;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSet;
 import com.google.errorprone.annotations.Immutable;
+import com.google.errorprone.annotations.InlineMe;
 import java.io.Serializable;
 import java.util.EnumSet;
 import java.util.Set;
@@ -84,15 +85,18 @@ public final class FeatureSet implements Serializable {
 
   public static final FeatureSet ES2021 = ES2021_MODULES.without(Feature.MODULES);
 
+  // NOTE: when ES2022 / ES2023 are added, the BROWSER_2024 FeatureSet defined below should be
+  // updated to include them.
+
   // Set of all fully supported features, even those part of language versions not fully supported
   public static final FeatureSet ES_NEXT = ES2021_MODULES.with(LangVersion.ES_NEXT.features());
 
   // Set of features fully supported in checks, even those not fully supported in optimizations
-  public static final FeatureSet ES_NEXT_IN = ES_NEXT.with(LangVersion.ES_NEXT_IN.features());
+  public static final FeatureSet ES_UNSTABLE = ES_NEXT.with(LangVersion.ES_UNSTABLE.features());
 
   // Set of all features that can be parsed, even those not yet fully supported in checks.
   public static final FeatureSet ES_UNSUPPORTED =
-      ES_NEXT_IN.with(LangVersion.ES_UNSUPPORTED.features());
+      ES_UNSTABLE.with(LangVersion.ES_UNSUPPORTED.features());
 
   public static final FeatureSet BROWSER_2020 =
       ES2019_MODULES.without(
@@ -107,11 +111,35 @@ public final class FeatureSet implements Serializable {
       ES2020_MODULES.without(
           // https://kangax.github.io/compat-table/es2016plus/
           // Regexp lookbehind is missing in Safari 14.
+          Feature.REGEXP_LOOKBEHIND);
+
+  public static final FeatureSet BROWSER_2022 =
+      ES2021_MODULES.without(
+          // https://kangax.github.io/compat-table/es2016plus/
+          // Regexp lookbehind is still missing in Safari 15.
+          Feature.REGEXP_LOOKBEHIND);
+
+  public static final FeatureSet BROWSER_2023 =
+      ES2021_MODULES.without(
+          // https://kangax.github.io/compat-table/es2016plus/
+          // Regexp lookbehind is still missing in Safari 16.2! It's in Safari TP though so
+          // 2024 shouldn't need this awkward hack. We can't bump up to ES2022 here because
+          // Safari 16.2 doesn't support class static blocks.
           // IMPORTANT: There is special casing for this feature and the ones excluded for
           // BROWSER_2020 above in RewritePolyfills.
           // If future Browser FeatureSet Year definitions have to remove any other features, then
           // we need to change the way that is done to avoid incorrect inclusion of polyfills.
           Feature.REGEXP_LOOKBEHIND);
+
+  // According to https://compat-table.github.io/compat-table/es2016plus/ this should include all
+  // features through ES2023. So once LangVersion.ES2023 is added, this should be updated to
+  // include it.
+  public static final FeatureSet BROWSER_2024 = ES2021_MODULES;
+
+  // According to https://compat-table.github.io/compat-table/es2016plus/ this should include all
+  // features through ES2024, except for the latest unicode versions for the /v regexp flag, which
+  // isn't disqualifying. So once LangVersion.ES2024 is added, this should be updated to include it.
+  public static final FeatureSet BROWSER_2025 = ES2021_MODULES;
 
   public static final FeatureSet ALL = ES_UNSUPPORTED.with(LangVersion.TYPESCRIPT.features());
 
@@ -125,8 +153,8 @@ public final class FeatureSet implements Serializable {
     ES2019,
     ES2020,
     ES2021,
-    ES_NEXT_IN,
     ES_NEXT,
+    ES_UNSTABLE,
     ES_UNSUPPORTED,
     TYPESCRIPT,
     ;
@@ -144,6 +172,9 @@ public final class FeatureSet implements Serializable {
 
   /** Specific features that can be included in a FeatureSet. */
   public enum Feature {
+    // ES3 features
+    REGEXP_SYNTAX("RegExp syntax", LangVersion.ES3),
+
     // ES5 features
     ES3_KEYWORDS_AS_IDENTIFIERS("ES3 keywords as identifiers", LangVersion.ES5),
     GETTER("getters", LangVersion.ES5),
@@ -158,7 +189,6 @@ public final class FeatureSet implements Serializable {
     BINARY_LITERALS("binary literal", LangVersion.ES2015),
     BLOCK_SCOPED_FUNCTION_DECLARATION("block-scoped function declaration", LangVersion.ES2015),
     CLASSES("class", LangVersion.ES2015),
-    CLASS_EXTENDS("class extends", LangVersion.ES2015),
     CLASS_GETTER_SETTER("class getters/setters", LangVersion.ES2015),
     COMPUTED_PROPERTIES("computed property", LangVersion.ES2015),
     CONST_DECLARATIONS("const declaration", LangVersion.ES2015),
@@ -187,7 +217,6 @@ public final class FeatureSet implements Serializable {
 
     // ES 2017 features:
     ASYNC_FUNCTIONS("async function", LangVersion.ES2017),
-    TRAILING_COMMA_IN_PARAM_LIST("trailing comma in param list", LangVersion.ES2017),
 
     // ES 2018 adds https://github.com/tc39/proposal-object-rest-spread
     OBJECT_LITERALS_WITH_SPREAD("object literals with spread", LangVersion.ES2018),
@@ -226,14 +255,19 @@ public final class FeatureSet implements Serializable {
     NUMERIC_SEPARATOR("numeric separator", LangVersion.ES2021),
     LOGICAL_ASSIGNMENT("Logical assignments", LangVersion.ES2021),
 
+    // ES 2022 adds https://github.com/tc39/proposal-regexp-match-indices
+    REGEXP_FLAG_D("RegExp flag 'd'", LangVersion.ES_NEXT),
+
     // ES_NEXT: Features that are fully supported, but part of a language version that is not yet
     // fully supported
 
-    // ES_NEXT_IN: Features fully supported in checks, but not yet fully supported in optimizations
+    // ES_UNSTABLE: Features fully supported in checks, but not fully supported everywhere else
+    PUBLIC_CLASS_FIELDS("Public class fields", LangVersion.ES_UNSTABLE), // Part of ES2022
 
-    PUBLIC_CLASS_FIELDS("Public class fields", LangVersion.ES_NEXT_IN),
+    // ES 2022 adds https://github.com/tc39/proposal-class-static-block
+    CLASS_STATIC_BLOCK("Class static block", LangVersion.ES_UNSTABLE),
 
-    // ES_UNSUPORTED: Features that we can parse, but not yet supported in all checks
+    // ES_UNSUPPORTED: Features that we can parse, but not yet supported in all checks
 
     // TypeScript type syntax that will never be implemented in browsers. Only used as an indicator
     // to the CodeGenerator that it should handle type syntax.
@@ -293,8 +327,8 @@ public final class FeatureSet implements Serializable {
     if (ES_NEXT.contains(this)) {
       return "es_next";
     }
-    if (ES_NEXT_IN.contains(this)) {
-      return "es_next_in";
+    if (ES_UNSTABLE.contains(this)) {
+      return "es_unstable";
     }
     if (ES_UNSUPPORTED.contains(this)) {
       return "es_unsupported";
@@ -311,6 +345,7 @@ public final class FeatureSet implements Serializable {
    * @deprecated Please use {@link #version()} instead.
    */
   @Deprecated
+  @InlineMe(replacement = "this.version()")
   public String versionForDebugging() {
     return version();
   }
@@ -332,6 +367,16 @@ public final class FeatureSet implements Serializable {
    */
   public FeatureSet union(FeatureSet other) {
     return new FeatureSet(union(features, other.features));
+  }
+
+  /** Does this {@link FeatureSet} contain at least one of the features of {@code other}? */
+  public boolean containsAtLeastOneOf(FeatureSet other) {
+    for (Feature otherFeature : other.features) {
+      if (this.features.contains(otherFeature)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Does this {@link FeatureSet} contain all of the features of {@code other}? */
@@ -447,8 +492,8 @@ public final class FeatureSet implements Serializable {
         return ES2021;
       case "es_next":
         return ES_NEXT;
-      case "es_next_in":
-        return ES_NEXT_IN;
+      case "es_unstable":
+        return ES_UNSTABLE;
       case "es_unsupported":
         return ES_UNSUPPORTED;
       case "all":
@@ -470,6 +515,6 @@ public final class FeatureSet implements Serializable {
   }
 
   public static FeatureSet latest() {
-    return ES_NEXT;
+    return ES_UNSUPPORTED;
   }
 }

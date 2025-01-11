@@ -23,11 +23,11 @@ import com.google.common.collect.MultimapBuilder;
 import com.google.common.collect.Multiset;
 import com.google.common.collect.SetMultimap;
 import com.google.common.collect.Sets;
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An AST traverser that keeps track of whether access to a generic resource are "guarded" or not. A
@@ -99,7 +99,7 @@ import java.util.Deque;
  * current node's context is guarded, either intrinsically or conditionally. If it is intrinsically
  * guarded, then it may be recorded as a condition for the purpose of guarding future contexts.
  */
-abstract class GuardedCallback<T> implements Callback {
+abstract class GuardedCallback<T> implements NodeTraversal.Callback {
   // Compiler is needed for coding convention (isPropertyTestFunction).
   private final AbstractCompiler compiler;
   // Map from short-circuiting conditional nodes (AND, OR, COALESCE, IF, and HOOK) to
@@ -279,7 +279,7 @@ abstract class GuardedCallback<T> implements Callback {
     // A very naive linked list for storing additional conditional nodes.
     final Context linked;
 
-    Context(Node conditional, boolean safe, Context linked) {
+    Context(@Nullable Node conditional, boolean safe, @Nullable Context linked) {
       this.conditional = conditional;
       this.safe = safe;
       this.linked = linked;

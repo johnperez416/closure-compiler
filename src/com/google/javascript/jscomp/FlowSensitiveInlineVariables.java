@@ -17,6 +17,7 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.base.Predicate;
@@ -26,18 +27,17 @@ import com.google.javascript.jscomp.ControlFlowGraph.Branch;
 import com.google.javascript.jscomp.MustBeReachingVariableDef.Definition;
 import com.google.javascript.jscomp.NodeTraversal.AbstractShallowCallback;
 import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
+import com.google.javascript.jscomp.NodeUtil.AllVarsDeclaredInFunction;
 import com.google.javascript.jscomp.graph.CheckPathsBetweenNodes;
 import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
 import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Inline variables when possible. Using the information from {@link MaybeReachingVariableUse} and
@@ -82,7 +82,7 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
   private class SideEffectPredicate implements Predicate<Node> {
     // Check if there are side effects affecting the value of any of these names
     // (but not properties defined on that name)
-    private final Set<String> namesToCheck;
+    private final @Nullable Set<String> namesToCheck;
 
     public SideEffectPredicate() {
       namesToCheck = null;
@@ -177,18 +177,18 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
     SyntacticScopeCreator scopeCreator = (SyntacticScopeCreator) t.getScopeCreator();
 
     // Compute the forward reaching definition.
-    ControlFlowAnalysis cfa = new ControlFlowAnalysis(compiler, false, true);
+    cfg =
+        ControlFlowAnalysis.builder()
+            .setCompiler(compiler)
+            .setCfgRoot(functionScopeRoot)
+            .setIncludeEdgeAnnotations(true)
+            .computeCfg();
 
-    // Process the body of the function.
-    cfa.process(null, functionScopeRoot);
-    cfg = cfa.getCfg();
-
-    HashSet<Var> escaped = new HashSet<>();
-    HashMap<String, Var> allVarsInFn = new HashMap<>();
-    ArrayList<Var> orderedVars = new ArrayList<>();
+    LinkedHashSet<Var> escaped = new LinkedHashSet<>();
     Scope scope = t.getScope();
-    NodeUtil.getAllVarsDeclaredInFunction(
-        allVarsInFn, orderedVars, compiler, scopeCreator, scope.getParent());
+    AllVarsDeclaredInFunction allVarsDeclaredInFunction =
+        NodeUtil.getAllVarsDeclaredInFunction(compiler, scopeCreator, scope.getParent());
+    Map<String, Var> allVarsInFn = allVarsDeclaredInFunction.getAllVariables();
     DataFlowAnalysis.computeEscaped(
         scope.getParent(), escaped, compiler, scopeCreator, allVarsInFn);
 
@@ -205,7 +205,8 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
     reachingUses.analyze();
     while (!candidates.isEmpty()) {
       Candidate c = candidates.iterator().next();
-      if (c.canInline(t.getScope())) {
+      Var candidateVar = checkNotNull(allVarsInFn.get(c.varName));
+      if (c.canInline(candidateVar.getScope())) {
         c.inlineVariable();
         candidates.remove(c);
 
@@ -285,7 +286,7 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
   }
 
   private class GatherCandidatesCfgNodeCallback extends AbstractCfgNodeTraversalCallback {
-    Node cfgNode = null;
+    @Nullable Node cfgNode = null;
 
     public void setCfgNode(Node cfgNode) {
       this.cfgNode = cfgNode;
@@ -313,7 +314,8 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
         }
 
         String name = n.getString();
-        if (compiler.getCodingConvention().isExported(name)) {
+        // This pass only runs on local scopes.
+        if (compiler.getCodingConvention().isExported(name, /* local= */ true)) {
           return;
         }
 
@@ -402,7 +404,7 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
         return false;
       }
 
-      Set<String> namesToCheck = new HashSet<>();
+      Set<String> namesToCheck = new LinkedHashSet<>();
       if (defMetadata.depends != null) {
         for (Var var : defMetadata.depends) {
           namesToCheck.add(var.getName());
@@ -446,9 +448,7 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
         return false;
       }
 
-      Collection<Node> uses = reachingUses.getUses(varName, getDefCfgNode());
-
-      if (uses.size() != 1) {
+      if (!hasExactlyOne(reachingUses.getUses(varName, getDefCfgNode()))) {
         return false;
       }
 
@@ -477,6 +477,17 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
       }
 
       return true;
+    }
+
+    boolean hasExactlyOne(Iterable<Node> iterable) {
+      Iterator<Node> iterator = iterable.iterator();
+      if (iterator.hasNext()) {
+        iterator.next();
+        if (!iterator.hasNext()) {
+          return true;
+        }
+      }
+      return false;
     }
 
     /**
@@ -593,7 +604,9 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
      */
     private boolean isRhsSafeToInline(final Scope usageScope) {
       // Don't inline definitions with an R-Value that has:
-      // 1) GETPROP, GETELEM,
+      // 1) GETELEM, OPTCHAIN_GETELEM (e.g: foo?.['bar']), GETPROP, OPTCHAIN_GETPROP (e.g:
+      // foo?.bar), CLASS, ARRAYLIT,
+      // OBJECTLIT, REGEXP
       // 2) anything that creates a new object.
       // Example:
       // var x = a.b.c; j.c = 1; print(x);
@@ -604,6 +617,9 @@ class FlowSensitiveInlineVariables implements CompilerPass, ScopedCallback {
             switch (input.getToken()) {
               case GETELEM:
               case GETPROP:
+              case OPTCHAIN_GETPROP:
+              case OPTCHAIN_GETELEM:
+              case CLASS:
               case ARRAYLIT:
               case OBJECTLIT:
               case REGEXP:

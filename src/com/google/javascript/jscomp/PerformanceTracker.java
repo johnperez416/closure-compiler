@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.javascript.jscomp.NodeUtil.estimateNumLines;
 import static com.google.javascript.jscomp.base.JSCompStrings.lines;
 import static java.lang.Math.max;
 import static java.util.Comparator.comparingLong;
@@ -26,24 +27,20 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultiset;
 import com.google.javascript.jscomp.CompilerOptions.TracerMode;
-import com.google.javascript.jscomp.parsing.parser.util.format.SimpleFormat;
+import com.google.javascript.jscomp.base.format.SimpleFormat;
 import com.google.javascript.rhino.Node;
-import com.google.javascript.rhino.StaticSourceFile;
 import com.google.javascript.rhino.Token;
-import java.io.FilterOutputStream;
-import java.io.IOException;
 import java.io.PrintStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map.Entry;
 
 /**
- * A PerformanceTracker collects statistics about the runtime of each pass, and
- * how much a pass impacts the size of the compiled output, before and after
- * gzip.
+ * A PerformanceTracker collects statistics about the runtime of each pass, and how much a pass
+ * impacts the size of the compiled output, before and after gzip.
  */
 public final class PerformanceTracker {
   private static final int DEFAULT_WHEN_SIZE_UNTRACKED = -1;
@@ -119,10 +116,7 @@ public final class PerformanceTracker {
     }
   }
 
-  /**
-   * Updates the saved jsRoot and resets the size tracking fields accordingly.
-   * @param jsRoot
-   */
+  /** Updates the saved jsRoot and resets the size tracking fields accordingly. */
   void updateAfterDeserialize(Node jsRoot) {
     // TODO(bradfordcsmith): Restore line counts for inputs and externs.
     this.jsRoot = jsRoot;
@@ -142,8 +136,8 @@ public final class PerformanceTracker {
   }
 
   /**
-   * Collects information about a pass P after P finishes running, eg, how much
-   * time P took and what was its impact on code size.
+   * Collects information about a pass P after P finishes running, eg, how much time P took and what
+   * was its impact on code size.
    *
    * @param passName short name of the pass
    * @param runtime execution time in milliseconds
@@ -210,22 +204,13 @@ public final class PerformanceTracker {
   private void recordInputCount() {
     for (Node n = this.externsRoot.getFirstChild(); n != null; n = n.getNext()) {
       this.externSources += 1;
-      this.externLines += estimateLines(n);
+      this.externLines += estimateNumLines(n);
     }
 
     for (Node n = this.jsRoot.getFirstChild(); n != null; n = n.getNext()) {
       this.jsSources += 1;
-      this.jsLines += estimateLines(n);
+      this.jsLines += estimateNumLines(n);
     }
-  }
-
-  private int estimateLines(Node n) {
-    checkState(n.isScript());
-    StaticSourceFile ssf = n.getStaticSourceFile();
-    if (ssf instanceof SourceFile) {
-      return ((SourceFile) ssf).getNumLines();
-    }
-    return 0;
   }
 
   private int bytesToMB(long bytes) {
@@ -312,7 +297,7 @@ public final class PerformanceTracker {
 
     for (Entry<String, Stats> entry : this.passSummary.entrySet()) {
       Stats stats = entry.getValue();
-      this.passesRuntime += stats.runtime;
+      this.passesRuntime = (int) (this.passesRuntime + stats.runtime);
       this.maxMem = max(this.maxMem, stats.allocMem);
       this.runs += stats.runs;
       this.changes += stats.changes;
@@ -330,7 +315,7 @@ public final class PerformanceTracker {
   }
 
   private void populatePassSummary() {
-    HashMap<String, Stats> tmpPassSummary = new HashMap<>();
+    LinkedHashMap<String, Stats> tmpPassSummary = new LinkedHashMap<>();
 
     for (Stats logStat : this.log) {
       String passName = logStat.pass;
@@ -361,6 +346,18 @@ public final class PerformanceTracker {
     this.astManifest = builder.build();
   }
 
+  private String disambiguatePropertiesSummary = "not executed";
+
+  public void setDisambiguatePropertiesSummary(String summary) {
+    this.disambiguatePropertiesSummary = summary;
+  }
+
+  private String ambiguatePropertiesSummary = "not executed";
+
+  public void setAmbiguatePropertiesSummary(String summary) {
+    this.ambiguatePropertiesSummary = summary;
+  }
+
   /**
    * Prints a summary, which contains aggregate stats for all runs of each pass and a log, which
    * contains stats for each individual run.
@@ -387,7 +384,10 @@ public final class PerformanceTracker {
             "Estimated GzReduction(bytes): " + this.gzDiff,
             "Estimated AST size(#nodes): " + this.astSize,
             "Estimated Size(bytes): " + this.codeSize,
-            "Estimated GzSize(bytes): " + this.gzCodeSize));
+            "Estimated GzSize(bytes): " + this.gzCodeSize,
+            "",
+            "DisambiguateProperties: " + this.disambiguatePropertiesSummary,
+            "AmbiguateProperties: " + this.ambiguatePropertiesSummary));
 
     output.println(
         lines(
@@ -456,27 +456,20 @@ public final class PerformanceTracker {
     }
 
     output.println();
-
     // this.output can be System.out, so don't close it to not lose subsequent
     // error messages. Flush to ensure that you will see the tracer report.
-    try {
-      // TODO(johnlenz): Remove this cast and try/catch.
-      // This is here to workaround GWT http://b/30943295
-      ((FilterOutputStream) output).flush();
-    } catch (IOException e) {
-      throw new RuntimeException("Unreachable.");
-    }
+    output.flush();
   }
 
   /**
-   * A Stats object contains statistics about a pass run, such as running time,
-   * size changes, etc
+   * A Stats object contains statistics about a pass run, such as running time, size changes, etc
    */
   public static class Stats {
     Stats(String pass, boolean iot) {
       this.pass = pass;
       this.isOneTime = iot;
     }
+
     public final String pass;
     public final boolean isOneTime;
     public long runtime = 0;

@@ -29,10 +29,9 @@ import com.google.javascript.jscomp.modules.Module;
 import com.google.javascript.jscomp.modules.ModuleMap;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Looks for references to Closure's goog.js file and globalizes. The goog.js file is an ES6 module
@@ -100,8 +99,8 @@ public class RewriteGoogJsImports implements CompilerPass {
   private final Mode mode;
   private final ModuleMap moduleMap;
   private final AbstractCompiler compiler;
-  private Module googModule;
-  private final Map<Module, Module> moduleReplacements = new HashMap<>();
+  private @Nullable Module googModule;
+  private final Map<Module, Module> moduleReplacements = new LinkedHashMap<>();
 
   public RewriteGoogJsImports(AbstractCompiler compiler, Mode mode, ModuleMap moduleMap) {
     checkNotNull(moduleMap);
@@ -124,7 +123,8 @@ public class RewriteGoogJsImports implements CompilerPass {
       closureModules.put(m.getKey(), newModule);
     }
 
-    compiler.setModuleMap(new ModuleMap(resolvedModules.build(), closureModules.build()));
+    compiler.setModuleMap(
+        new ModuleMap(resolvedModules.buildOrThrow(), closureModules.buildOrThrow()));
     moduleReplacements.clear();
   }
 
@@ -187,7 +187,6 @@ public class RewriteGoogJsImports implements CompilerPass {
       nameNode.setString("$goog");
       t.reportCodeChange();
 
-      return;
     }
 
     @Override
@@ -251,8 +250,7 @@ public class RewriteGoogJsImports implements CompilerPass {
     }
   }
 
-  @Nullable
-  private Node findGoogImportNode(Node scriptRoot) {
+  private @Nullable Node findGoogImportNode(Node scriptRoot) {
     // Cannot use the module map here - information is lost about the imports. The "bound names"
     // could be from transitive imports, but we lose the original import.
     boolean valid = true;
@@ -309,14 +307,17 @@ public class RewriteGoogJsImports implements CompilerPass {
       if (googImportNode != null && mode == Mode.LINT_AND_REWRITE) {
         // If googModule is null then goog.js was not part of the input. Try to be fault tolerant
         // and just assume that everything exported is on the global goog.
-        new ReferenceReplacer(
-            scriptRoot, googImportNode, module, /* globalizeAllReferences= */ googModule == null);
+        ReferenceReplacer unused =
+            new ReferenceReplacer(
+                scriptRoot,
+                googImportNode,
+                module,
+                /* globalizeAllReferences= */ googModule == null);
       }
     }
   }
 
-  @Nullable
-  private Node findGoogJsScriptNode(Node root) {
+  private @Nullable Node findGoogJsScriptNode(Node root) {
     ModulePath expectedGoogPath = null;
 
     // Find Closure's base.js file. goog.js should be right next to it.
@@ -343,9 +344,7 @@ public class RewriteGoogJsImports implements CompilerPass {
         } else if (script.getSourceFileName().endsWith("/goog.js")) {
           // Ban the name goog.js as input except for Closure's goog.js file. This simplifies a lot
           // of logic if the only file that is allowed to be named goog.js is Closure's.
-          compiler.report(
-              JSError.make(
-                  script.getSourceFileName(), -1, -1, CheckLevel.ERROR, CANNOT_NAME_FILE_GOOG));
+          compiler.report(JSError.make(script.getSourceFileName(), -1, -1, CANNOT_NAME_FILE_GOOG));
         }
       }
 

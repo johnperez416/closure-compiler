@@ -21,9 +21,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link RewriteGlobalDeclarationsForTryCatchWrapping}
- */
+/** Tests for {@link RewriteGlobalDeclarationsForTryCatchWrapping} */
 @RunWith(JUnit4.class)
 public final class RewriteGlobalDeclarationsForTryCatchWrappingTest extends CompilerTestCase {
 
@@ -56,8 +54,11 @@ public final class RewriteGlobalDeclarationsForTryCatchWrappingTest extends Comp
   @Test
   public void testFunctionDeclarationsInModule() {
     test(
-        JSChunkGraphBuilder.forUnordered().addChunk("a; function f(){} function g(){}").build(),
-        new String[] {"var f = function(){}; var g = function(){}; a"});
+        srcs(
+            JSChunkGraphBuilder.forUnordered()
+                .addChunk("a; function f(){} function g(){}")
+                .build()),
+        expected("var f = function(){}; var g = function(){}; a"));
   }
 
   @Test

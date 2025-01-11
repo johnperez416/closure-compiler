@@ -22,19 +22,19 @@ import static com.google.common.base.Preconditions.checkState;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.jstype.JSType;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.Set;
-import javax.annotation.Nullable;
+import java.util.function.Supplier;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A set of utility functions that replaces CALL with a specified FUNCTION body, replacing and
@@ -44,6 +44,7 @@ class FunctionInjector {
 
   /** Sentinel value indicating that the key contains no functions. */
   private static final Node NO_FUNCTIONS = new Node(Token.FUNCTION);
+
   /** Sentinel value indicating that the key contains multiple distinct functions. */
   private static final Node MULTIPLE_FUNCTIONS = new Node(Token.FUNCTION);
 
@@ -82,11 +83,11 @@ class FunctionInjector {
   static class Builder {
 
     private final AbstractCompiler compiler;
-    private Supplier<String> safeNameIdSupplier = null;
+    private @Nullable Supplier<String> safeNameIdSupplier = null;
     private boolean assumeStrictThis = true;
     private boolean assumeMinimumCapture = true;
     private boolean allowDecomposition = true;
-    private FunctionArgumentInjector functionArgumentInjector = null;
+    private @Nullable FunctionArgumentInjector functionArgumentInjector = null;
 
     Builder(AbstractCompiler compiler) {
       this.compiler = checkNotNull(compiler);
@@ -97,6 +98,7 @@ class FunctionInjector {
      *
      * <p>If this method is not called, {@code compiler.getUniqueNameIdSupplier()} will be used.
      */
+    @CanIgnoreReturnValue
     Builder safeNameIdSupplier(Supplier<String> safeNameIdSupplier) {
       this.safeNameIdSupplier = checkNotNull(safeNameIdSupplier);
       return this;
@@ -107,16 +109,19 @@ class FunctionInjector {
      *
      * <p>Default is {@code true}.
      */
+    @CanIgnoreReturnValue
     Builder allowDecomposition(boolean allowDecomposition) {
       this.allowDecomposition = allowDecomposition;
       return this;
     }
 
+    @CanIgnoreReturnValue
     Builder assumeStrictThis(boolean assumeStrictThis) {
       this.assumeStrictThis = assumeStrictThis;
       return this;
     }
 
+    @CanIgnoreReturnValue
     Builder assumeMinimumCapture(boolean assumeMinimumCapture) {
       this.assumeMinimumCapture = assumeMinimumCapture;
       return this;
@@ -127,6 +132,7 @@ class FunctionInjector {
      *
      * <p>Default is for the builder to create this. This method exists for testing purposes.
      */
+    @CanIgnoreReturnValue
     public Builder functionArgumentInjector(FunctionArgumentInjector functionArgumentInjector) {
       this.functionArgumentInjector = checkNotNull(functionArgumentInjector);
       return this;
@@ -163,13 +169,13 @@ class FunctionInjector {
   static class Reference {
     final Node callNode;
     final Scope scope;
-    final JSChunk module;
+    final JSChunk chunk;
     final InliningMode mode;
 
-    Reference(Node callNode, Scope scope, JSChunk module, InliningMode mode) {
+    Reference(Node callNode, Scope scope, JSChunk chunk, InliningMode mode) {
       this.callNode = callNode;
       this.scope = scope;
-      this.module = module;
+      this.chunk = chunk;
       this.mode = mode;
     }
 
@@ -202,16 +208,11 @@ class FunctionInjector {
     Node block = NodeUtil.getFunctionBody(fnNode);
 
     // Basic restrictions on functions that can be inlined:
-    // 0) The function is inlinable by convention
     // 1) It contains a reference to itself.
     // 2) It uses its parameters indirectly using "arguments" (it isn't
     //    handled yet.
     // 3) It references "eval". Inline a function containing eval can have
     //    large performance implications.
-
-    if (!compiler.getCodingConvention().isInlinableFunction(fnNode)) {
-      return false;
-    }
 
     final String fnRecursionName = fnNode.getFirstChild().getString();
     checkState(fnRecursionName != null);
@@ -366,7 +367,7 @@ class FunctionInjector {
     // no need to check for conflicts.
 
     // Create an argName -> expression map, checking for side effects.
-    Map<String, Node> argMap =
+    ImmutableMap<String, Node> argMap =
         functionArgumentInjector.getFunctionCallParameterMap(
             fnNode, callNode, this.safeNameIdSupplier);
 
@@ -832,7 +833,7 @@ class FunctionInjector {
       boolean hasArgs = !args.isEmpty();
       if (hasArgs) {
         // Limit the inlining
-        Set<String> allNamesToAlias = new HashSet<>(namesToAlias);
+        Set<String> allNamesToAlias = new LinkedHashSet<>(namesToAlias);
         functionArgumentInjector.maybeAddTempsForCallArguments(
             compiler, calleeFn, args, allNamesToAlias, compiler.getCodingConvention());
         if (!allNamesToAlias.isEmpty()) {
@@ -887,7 +888,7 @@ class FunctionInjector {
     boolean hasArgs = !args.isEmpty();
     if (hasArgs) {
       // Limit the inlining
-      Set<String> allNamesToAlias = new HashSet<>(namesToAlias);
+      Set<String> allNamesToAlias = new LinkedHashSet<>(namesToAlias);
       functionArgumentInjector.maybeAddTempsForCallArguments(
           compiler, fnNode, args, allNamesToAlias, compiler.getCodingConvention());
       if (!allNamesToAlias.isEmpty()) {
@@ -900,7 +901,7 @@ class FunctionInjector {
 
   /** Determine if inlining the function is likely to reduce the code size. */
   boolean inliningLowersCost(
-      JSChunk fnModule,
+      JSChunk fnChunk,
       Node fnNode,
       Collection<? extends Reference> refs,
       Set<String> namesToAlias,
@@ -913,8 +914,8 @@ class FunctionInjector {
 
     int referencesUsingBlockInlining = 0;
 
-    boolean checkModules = isRemovable && fnModule != null;
-    JSChunkGraph moduleGraph = compiler.getModuleGraph();
+    boolean checkModules = isRemovable && fnChunk != null;
+    JSChunkGraph chunkGraph = compiler.getChunkGraph();
 
     for (Reference ref : refs) {
       if (ref.mode == InliningMode.BLOCK) {
@@ -922,8 +923,8 @@ class FunctionInjector {
       }
 
       // Check if any of the references cross the module boundaries.
-      if (checkModules && ref.module != null) {
-        if (ref.module != fnModule && !moduleGraph.dependsOn(ref.module, fnModule)) {
+      if (checkModules && ref.chunk != null) {
+        if (ref.chunk != fnChunk && !chunkGraph.dependsOn(ref.chunk, fnChunk)) {
           // Calculate the cost as if the function were non-removable,
           // if it still lowers the cost inline it.
           isRemovable = false;
@@ -960,7 +961,9 @@ class FunctionInjector {
         isRemovable);
   }
 
-  /** @return Whether inlining will lower cost. */
+  /**
+   * @return Whether inlining will lower cost.
+   */
   private static boolean doesLowerCost(
       Node fnNode,
       int callCost,
@@ -993,8 +996,6 @@ class FunctionInjector {
   /**
    * Gets an estimate of the cost in characters of making the function call: the sum of the
    * identifiers and the separators.
-   *
-   * @param referencesThis
    */
   private static int estimateCallCost(Node fnNode, boolean referencesThis) {
     Node argsNode = NodeUtil.getFunctionParameters(fnNode);
@@ -1016,7 +1017,9 @@ class FunctionInjector {
     return callCost;
   }
 
-  /** @return The difference between the function definition cost and inline cost. */
+  /**
+   * @return The difference between the function definition cost and inline cost.
+   */
   private static int inlineCostDelta(Node fnNode, Set<String> namesToAlias, InliningMode mode) {
     // The part of the function that is never inlined:
     //    "function xx(xx,xx){}" (15 + (param count * 3) -1;

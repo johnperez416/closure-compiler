@@ -26,26 +26,23 @@ import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** Collects global variable references for use by {@link CrossChunkCodeMotion}. */
 public final class CrossChunkReferenceCollector implements ScopedCallback, CompilerPass {
 
   /** Maps global variable name to the corresponding {@link Var} object. */
-  private final Map<String, Var> varsByName = new HashMap<>();
+  private final Map<String, Var> varsByName = new LinkedHashMap<>();
 
   /**
-   * Maps a given variable to a collection of references to that name. Note that
-   * Var objects are not stable across multiple traversals (unlike scope root or
-   * name).
+   * Maps a given variable to a collection of references to that name. Note that Var objects are not
+   * stable across multiple traversals (unlike scope root or name).
    */
-  private final Map<Var, ReferenceCollection> referenceMap =
-       new LinkedHashMap<>();
+  private final Map<Var, ReferenceCollection> referenceMap = new LinkedHashMap<>();
 
   /** The stack of basic blocks and scopes the current traversal is in. */
   private final List<BasicBlock> blockStack = new ArrayList<>();
@@ -55,13 +52,11 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
 
   private final ScopeCreator scopeCreator;
 
-  /**
-   * JavaScript compiler to use in traversing.
-   */
+  /** JavaScript compiler to use in traversing. */
   private final AbstractCompiler compiler;
 
   private int statementCounter = 0;
-  private TopLevelStatementDraft topLevelStatementDraft = null;
+  private @Nullable TopLevelStatementDraft topLevelStatementDraft = null;
 
   /** Constructor initializes block stack. */
   CrossChunkReferenceCollector(AbstractCompiler compiler, ScopeCreator creator) {
@@ -69,10 +64,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     this.scopeCreator = creator;
   }
 
-  /**
-   * Convenience method for running this pass over a tree with this
-   * class as a callback.
-   */
+  /** Convenience method for running this pass over a tree with this class as a callback. */
   @Override
   public void process(Node externs, Node root) {
     checkState(topLevelStatements.isEmpty(), "process() called more than once");
@@ -92,16 +84,12 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
         .traverse(root);
   }
 
-  /**
-   * Gets the variables that were referenced in this callback.
-   */
+  /** Gets the variables that were referenced in this callback. */
   Iterable<Var> getAllSymbols() {
     return referenceMap.keySet();
   }
 
-  /**
-   * Gets the reference collection for the given variable.
-   */
+  /** Gets the reference collection for the given variable. */
   ReferenceCollection getReferences(Var v) {
     return referenceMap.get(v);
   }
@@ -110,10 +98,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     return ImmutableMap.copyOf(varsByName);
   }
 
-  /**
-   * For each node, update the block stack and reference collection
-   * as appropriate.
-   */
+  /** For each node, update the block stack and reference collection as appropriate. */
   @Override
   public void visit(NodeTraversal t, Node n, Node parent) {
     if (topLevelStatementDraft != null) {
@@ -126,7 +111,8 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
 
         if (v != null) {
           // Only global, non-exported names can be moved
-          if (v.isGlobal() && !compiler.getCodingConvention().isExported(v.getName())) {
+          if (v.isGlobal()
+              && !compiler.getCodingConvention().isExported(v.getName(), /* local= */ false)) {
             if (varsByName.containsKey(varName)) {
               checkState(Objects.equals(varsByName.get(varName), v));
             } else {
@@ -148,9 +134,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     }
   }
 
-  /**
-   * Updates block stack and invokes any additional behavior.
-   */
+  /** Updates block stack and invokes any additional behavior. */
   @Override
   public void enterScope(NodeTraversal t) {
     Node n = t.getScopeRoot();
@@ -163,9 +147,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     }
   }
 
-  /**
-   * Updates block stack and invokes any additional behavior.
-   */
+  /** Updates block stack and invokes any additional behavior. */
   @Override
   public void exitScope(NodeTraversal t) {
     if (t.isHoistScope()) {
@@ -186,9 +168,9 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     return true;
   }
 
-  private TopLevelStatementDraft initializeDraftStatement(JSChunk module, Node statementNode) {
+  private TopLevelStatementDraft initializeDraftStatement(JSChunk chunk, Node statementNode) {
     TopLevelStatementDraft draft =
-        new TopLevelStatementDraft(statementCounter++, module, statementNode);
+        new TopLevelStatementDraft(statementCounter++, chunk, statementNode);
     // Determine whether this statement declares a name or not.
     // If so, save its name node and value node, if any.
     if (NodeUtil.isNameDeclaration(statementNode)) {
@@ -371,6 +353,9 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
               // class definition time. So, we must check canMoveValue for static fields.
               return false;
             }
+          } else if (member.isBlock()) {
+            // TODO(bradfordcsmith): Ideally could move these in some cases, fix later
+            return false;
           } else {
             checkState(member.isMemberFunctionDef() || NodeUtil.isGetOrSetKey(member), member);
           }
@@ -466,7 +451,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     /** 0-based index indicating original order of this statement in the source. */
     private final int originalOrder;
 
-    private final JSChunk module;
+    private final JSChunk chunk;
     private final Node statementNode;
     private final List<Reference> nonDeclarationReferences;
     private final Reference declaredNameReference;
@@ -474,7 +459,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
 
     TopLevelStatement(TopLevelStatementDraft draft) {
       this.originalOrder = draft.originalOrder;
-      this.module = draft.module;
+      this.chunk = draft.chunk;
       this.statementNode = draft.statementNode;
       this.nonDeclarationReferences = Collections.unmodifiableList(draft.nonDeclarationReferences);
       this.declaredNameReference = draft.declaredNameReference;
@@ -485,8 +470,8 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
       return originalOrder;
     }
 
-    JSChunk getModule() {
-      return module;
+    JSChunk getChunk() {
+      return chunk;
     }
 
     Node getStatementNode() {
@@ -522,16 +507,16 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
     /** 0-based index indicating original order of this statement in the source. */
     final int originalOrder;
 
-    final JSChunk module;
+    final JSChunk chunk;
     final Node statementNode;
     final List<Reference> nonDeclarationReferences = new ArrayList<>();
-    Node declaredValueNode = null;
-    Node declaredNameNode = null;
-    Reference declaredNameReference = null;
+    @Nullable Node declaredValueNode = null;
+    @Nullable Node declaredNameNode = null;
+    @Nullable Reference declaredNameReference = null;
 
-    TopLevelStatementDraft(int originalOrder, JSChunk module, Node statementNode) {
+    TopLevelStatementDraft(int originalOrder, JSChunk chunk, Node statementNode) {
       this.originalOrder = originalOrder;
-      this.module = module;
+      this.chunk = chunk;
       this.statementNode = statementNode;
     }
   }

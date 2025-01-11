@@ -32,12 +32,6 @@ import java.util.List;
 public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrderCallback
     implements CompilerPass {
 
-  // The name of the index variable for populating the rest parameter array.
-  private static final String REST_INDEX = "$jscomp$restIndex";
-
-  // The name of the placeholder for the rest parameters.
-  private static final String REST_PARAMS = "$jscomp$restParams";
-
   private static final String FRESH_SPREAD_VAR = "$jscomp$spread$args";
   private static final FeatureSet transpiledFeatures =
       FeatureSet.BARE_MINIMUM.with(Feature.REST_PARAMETERS, Feature.SPREAD_EXPRESSIONS);
@@ -48,7 +42,6 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
 
   private static final AstFactory.Type arrayType = type(StandardColors.ARRAY_ID);
   private static final AstFactory.Type concatFnType = type(StandardColors.TOP_OBJECT);
-  private static final AstFactory.Type numberType = type(StandardColors.NUMBER);
 
   public Es6RewriteRestAndSpread(AbstractCompiler compiler) {
     this.compiler = compiler;
@@ -59,7 +52,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
   @Override
   public void process(Node externs, Node root) {
     TranspilationPasses.processTranspile(compiler, root, transpiledFeatures, this);
-    TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, transpiledFeatures);
+    TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, root, transpiledFeatures);
   }
 
   @Override
@@ -90,9 +83,9 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
     Node nameNode = restParam.getOnlyChild();
     String paramName = nameNode.getString();
 
-    // Swap the existing param into the list, moving requisite AST annotations.
-    nameNode.setJSDocInfo(restParam.getJSDocInfo());
-    restParam.replaceWith(nameNode.detach());
+    // Remove the existing param from the list, as it will be replaced with a declaration with the
+    // same name.
+    restParam.detach();
 
     if (!functionBody.hasChildren()) {
       // If function has no body, we are done!
@@ -100,63 +93,31 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
       return;
     }
 
-    // Don't insert these directly, just clone them.
-    Node newArrayName = astFactory.createName(REST_PARAMS, arrayType);
-    Node cursorName = astFactory.createName(REST_INDEX, numberType);
-
-    Node newBlock = IR.block().srcref(functionBody);
+    // Now that the restParam is deleted, create a let declaration by making a new NAME node of the
+    // same name `paramName`
     Node let =
         astFactory
-            .createSingleLetNameDeclaration(paramName, newArrayName)
+            .createSingleLetNameDeclaration(
+                paramName, // creates a new NAME node with name `paramName`
+                astFactory.createCall(
+                    astFactory.createGetPropWithUnknownType(
+                        astFactory.createQName(this.namespace, "$jscomp.getRestArguments"),
+                        "apply"),
+                    type(nameNode),
+                    astFactory.createNumber(restIndex),
+                    astFactory.createArgumentsReference()))
             .srcrefTreeIfMissing(functionBody);
-    newBlock.addChildToFront(let);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
-
-    for (Node child = functionBody.getFirstChild(); child != null; ) {
-      final Node next = child.getNext();
-      newBlock.addChildToBack(child.detach());
-      child = next;
+    Node insertBeforePoint =
+        NodeUtil.getInsertionPointAfterAllInnerFunctionDeclarations(functionBody);
+    if (insertBeforePoint != null) {
+      let.insertBefore(insertBeforePoint);
+    } else {
+      // functionBody only contains hoisted function declarations
+      functionBody.addChildToBack(let);
     }
-
-    Node newArrayDeclaration = IR.var(newArrayName.cloneTree(), astFactory.createArraylit());
-    functionBody.addChildToFront(newArrayDeclaration.srcrefTreeIfMissing(restParam));
-
-    // TODO(b/74074478): Use a general utility method instead of an inlined loop.
-    Node copyLoop =
-        astFactory
-            .createFor(
-                IR.var(cursorName.cloneTree(), astFactory.createNumber(restIndex)),
-                astFactory.createLessThan(
-                    cursorName.cloneTree(),
-                    astFactory.createGetProp(
-                        astFactory.createArgumentsReference(),
-                        "length",
-                        type(StandardColors.NUMBER))),
-                astFactory.createInc(cursorName.cloneTree(), false),
-                astFactory.createBlock(
-                    astFactory.exprResult(
-                        astFactory.createAssign(
-                            astFactory.createGetElem(
-                                newArrayName.cloneTree(),
-                                astFactory.createSub(
-                                    cursorName.cloneTree(), astFactory.createNumber(restIndex))),
-                            astFactory
-                                .createGetElem(
-                                    astFactory.createArgumentsReference(), cursorName.cloneTree())
-                                .setColor(StandardColors.NUMBER)))))
-            .srcrefTreeIfMissing(restParam);
-    copyLoop.insertAfter(newArrayDeclaration);
-
-    functionBody.addChildToBack(newBlock);
-    compiler.reportChangeToEnclosingScope(newBlock);
-
-    // For now, we are running transpilation before type-checking, so we'll
-    // need to make sure changes don't invalidate the JSDoc annotations.
-    // Therefore we keep the parameter list the same length and only initialize
-    // the values if they are set to undefined.
-    // TODO(lharker): the above comment is out of date since we move transpilation after
-    // typechecking. see if we can improve transpilation and not keep the parameter list the
-    // same length?
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
+    compiler.ensureLibraryInjected("es6/util/restarguments", /* force= */ false);
+    t.reportCodeChange();
   }
 
   /**
@@ -233,7 +194,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
             currGroup = null;
           }
 
-          Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "arrayFromIterable");
+          TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "arrayFromIterable");
           groups.add(
               astFactory.createJscompArrayFromIterableCall(spreadExpression, this.namespace));
         }
@@ -334,8 +295,9 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
         // If the first group is an array literal, we can just use that for concatenation,
         // otherwise use an empty array literal.
         //
-        // TODO(nickreid): Stop distringuishing between array literals and variables when this pass
-        // is moved after type-checking.
+        // TODO(bradfordcsmith): Now that this pass runs after type checking, it would be nice
+        // to skip creating an array literal when when the type of the first element says it is
+        // an Array.
         Node baseArrayLit =
             groups.get(0).isArrayLit() ? groups.remove(0) : astFactory.createArraylit();
         Node concat = astFactory.createGetProp(baseArrayLit, "concat", concatFnType);
@@ -433,7 +395,7 @@ public final class Es6RewriteRestAndSpread extends NodeTraversal.AbstractPostOrd
 
     if (FeatureSet.ES3.contains(compiler.getOptions().getOutputFeatureSet())) {
       // TODO(tbreisacher): Support this in ES3 too by not relying on Function.bind.
-      Es6ToEs3Util.cannotConvert(
+      TranspilationUtil.cannotConvert(
           compiler,
           spreadParent,
           "\"...\" passed to a constructor (consider using --language_out=ES5)");

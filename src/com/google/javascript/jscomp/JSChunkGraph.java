@@ -21,7 +21,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
@@ -33,31 +32,29 @@ import com.google.common.collect.Ordering;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
-import com.google.javascript.jscomp.deps.Es6SortedDependencies;
+import com.google.javascript.jscomp.base.LinkedIdentityHashMap;
+import com.google.javascript.jscomp.base.format.SimpleFormat;
 import com.google.javascript.jscomp.deps.SortedDependencies;
 import com.google.javascript.jscomp.deps.SortedDependencies.MissingProvideException;
 import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
-import com.google.javascript.jscomp.parsing.parser.util.format.SimpleFormat;
 import com.google.javascript.rhino.StaticSourceFile.SourceKind;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
- * A {@link JSChunk} dependency graph that assigns a depth to each module and can answer
- * depth-related queries about them. For the purposes of this class, a module's depth is defined as
- * the number of hops in the longest (non cyclic) path from the module to a module with no
+ * A {@link JSChunk} dependency graph that assigns a depth to each chunk and can answer
+ * depth-related queries about them. For the purposes of this class, a chunk's depth is defined as
+ * the number of hops in the longest (non cyclic) path from the chunk to a chunk with no
  * dependencies.
  */
 public final class JSChunkGraph implements Serializable {
@@ -77,174 +74,172 @@ public final class JSChunkGraph implements Serializable {
           "JSC_IMPLICIT_WEAK_ENTRY_POINT_ERROR",
           "Implicit entry point input should not be weak: {0}");
 
-  private final JSChunk[] modules;
+  private final JSChunk[] chunks;
 
   /**
-   * selfPlusTransitiveDeps[i] = indices of all modules that modules[i] depends on, including
-   * itself.
+   * selfPlusTransitiveDeps[i] = indices of all chunks that chunks[i] depends on, including itself.
    */
   private final BitSet[] selfPlusTransitiveDeps;
 
-  /**
-   * subtreeSize[i] = Number of modules that transitively depend on modules[i], including itself.
-   */
+  /** subtreeSize[i] = Number of chunks that transitively depend on chunks[i], including itself. */
   private final int[] subtreeSize;
 
   /**
-   * Lists of modules at each depth. <code>modulesByDepth.get(3)</code> is a list of the modules at
+   * Lists of chunks at each depth. <code>chunksByDepth.get(3)</code> is a list of the chunks at
    * depth 3, for example.
    */
-  private final List<List<JSChunk>> modulesByDepth;
+  private final List<List<JSChunk>> chunksByDepth;
 
   /**
    * dependencyMap is a cache of dependencies that makes the dependsOn function faster. Each map
-   * entry associates a starting JSChunk with the set of JSModules that are transitively dependent
-   * on the starting module.
+   * entry associates a starting JSChunk with the set of JSChunks that are transitively dependent on
+   * the starting chunk.
    *
-   * <p>If the cache returns null, then the entry hasn't been filled in for that module.
+   * <p>If the cache returns null, then the entry hasn't been filled in for that chunk.
    *
    * <p>NOTE: JSChunk has identity semantics so this map implementation is safe
    */
-  private final Map<JSChunk, Set<JSChunk>> dependencyMap = new IdentityHashMap<>();
+  private final LinkedIdentityHashMap<JSChunk, Set<JSChunk>> dependencyMap =
+      new LinkedIdentityHashMap<>();
 
-  /** Creates a module graph from a list of modules in dependency order. */
-  public JSChunkGraph(JSChunk[] modulesInDepOrder) {
-    this(Arrays.asList(modulesInDepOrder));
+  /** Creates a chunk graph from a list of chunks in dependency order. */
+  public JSChunkGraph(JSChunk[] chunksInDepOrder) {
+    this(Arrays.asList(chunksInDepOrder));
   }
 
-  /** Creates a module graph from a list of modules in dependency order. */
-  public JSChunkGraph(List<JSChunk> modulesInDepOrder) {
-    Preconditions.checkState(!modulesInDepOrder.isEmpty());
-    modulesInDepOrder = makeWeakModule(modulesInDepOrder);
-    modules = new JSChunk[modulesInDepOrder.size()];
+  /** Creates a chunk graph from a list of chunks in dependency order. */
+  public JSChunkGraph(List<JSChunk> chunksInDepOrder) {
+    Preconditions.checkState(!chunksInDepOrder.isEmpty());
+    chunksInDepOrder = makeWeakChunk(chunksInDepOrder);
+    chunks = new JSChunk[chunksInDepOrder.size()];
 
-    // n = number of modules
-    // Populate modules O(n)
-    for (int moduleIndex = 0; moduleIndex < modules.length; ++moduleIndex) {
-      final JSChunk module = modulesInDepOrder.get(moduleIndex);
-      checkState(module.getIndex() == -1, "Module index already set: %s", module);
-      module.setIndex(moduleIndex);
-      modules[moduleIndex] = module;
+    // n = number of chunks
+    // Populate chunks O(n)
+    for (int chunkIndex = 0; chunkIndex < chunks.length; ++chunkIndex) {
+      final JSChunk chunk = chunksInDepOrder.get(chunkIndex);
+      checkState(chunk.getIndex() == -1, "Chunk index already set: %s", chunk);
+      chunk.setIndex(chunkIndex);
+      chunks[chunkIndex] = chunk;
     }
 
-    // Determine depth for all modules.
+    // Determine depth for all chunks.
     // m = number of edges in the graph
     // O(n*m)
-    modulesByDepth = initModulesByDepth();
+    chunksByDepth = initChunksByDepth();
 
-    // Determine transitive deps for all modules.
+    // Determine transitive deps for all chunks.
     // O(n*m * log(n)) (probably a bit better than that)
     selfPlusTransitiveDeps = initTransitiveDepsBitSets();
 
     // O(n*m)
     subtreeSize = initSubtreeSize();
 
-    // Move all sources marked as weak by outside sources (e.g. flags) into the weak module.
-    moveMarkedWeakSources(getModuleByName(JSChunk.WEAK_MODULE_NAME), getAllInputs());
+    // Move all sources marked as weak by outside sources (e.g. flags) into the weak chunk.
+    moveMarkedWeakSources(getChunkByName(JSChunk.WEAK_CHUNK_NAME), getAllInputs());
   }
 
-  private List<List<JSChunk>> initModulesByDepth() {
-    final List<List<JSChunk>> tmpModulesByDepth = new ArrayList<>();
-    for (int moduleIndex = 0; moduleIndex < modules.length; ++moduleIndex) {
-      final JSChunk module = modules[moduleIndex];
-      checkState(module.getDepth() == -1, "Module depth already set: %s", module);
+  private List<List<JSChunk>> initChunksByDepth() {
+    final List<List<JSChunk>> tmpChunksByDepth = new ArrayList<>();
+    for (int chunkIndex = 0; chunkIndex < chunks.length; ++chunkIndex) {
+      final JSChunk chunk = chunks[chunkIndex];
+      checkState(chunk.getDepth() == -1, "Chunk depth already set: %s", chunk);
       int depth = 0;
-      for (JSChunk dep : module.getDependencies()) {
+      for (JSChunk dep : chunk.getDependencies()) {
         int depDepth = dep.getDepth();
         if (depDepth < 0) {
-          throw new ModuleDependenceException(SimpleFormat.format(
-              "Modules not in dependency order: %s preceded %s",
-              module.getName(), dep.getName()),
-              module, dep);
+          throw new ChunkDependenceException(
+              SimpleFormat.format(
+                  "Chunks not in dependency order: %s preceded %s", chunk.getName(), dep.getName()),
+              chunk,
+              dep);
         }
         depth = max(depth, depDepth + 1);
       }
 
-      module.setDepth(depth);
-      if (depth == tmpModulesByDepth.size()) {
-        tmpModulesByDepth.add(new ArrayList<JSChunk>());
+      chunk.setDepth(depth);
+      if (depth == tmpChunksByDepth.size()) {
+        tmpChunksByDepth.add(new ArrayList<JSChunk>());
       }
-      tmpModulesByDepth.get(depth).add(module);
+      tmpChunksByDepth.get(depth).add(chunk);
     }
-    return tmpModulesByDepth;
+    return tmpChunksByDepth;
   }
 
   /**
-   * If a weak module doesn't already exist, creates a weak module depending on every other module.
+   * If a weak chunk doesn't already exist, creates a weak chunk depending on every other chunk.
    *
-   * <p>Does not move any sources into the weak module.
+   * <p>Does not move any sources into the weak chunk.
    *
-   * @return a new list of modules that includes the weak module, if it was newly created, or the
-   *     same list if the weak module already existed
-   * @throws IllegalStateException if a weak module already exists but doesn't fulfill the above
+   * @return a new list of chunks that includes the weak chunk, if it was newly created, or the same
+   *     list if the weak chunk already existed
+   * @throws IllegalStateException if a weak chunk already exists but doesn't fulfill the above
    *     conditions
    */
-  private List<JSChunk> makeWeakModule(List<JSChunk> modulesInDepOrder) {
-    boolean hasWeakModule = false;
-    for (JSChunk module : modulesInDepOrder) {
-      if (module.getName().equals(JSChunk.WEAK_MODULE_NAME)) {
-        hasWeakModule = true;
-        Set<JSChunk> allOtherModules = new HashSet<>(modulesInDepOrder);
-        allOtherModules.remove(module);
+  private List<JSChunk> makeWeakChunk(List<JSChunk> chunksInDepOrder) {
+    boolean hasWeakChunk = false;
+    for (JSChunk chunk : chunksInDepOrder) {
+      if (chunk.getName().equals(JSChunk.WEAK_CHUNK_NAME)) {
+        hasWeakChunk = true;
+        Set<JSChunk> allOtherChunks = new LinkedHashSet<>(chunksInDepOrder);
+        allOtherChunks.remove(chunk);
         checkState(
-            module.getAllDependencies().containsAll(allOtherModules),
-            "A weak module already exists but it does not depend on every other module.");
+            chunk.getAllDependencies().containsAll(allOtherChunks),
+            "A weak chunk already exists but it does not depend on every other chunk.");
         checkState(
-            module.getAllDependencies().size() == allOtherModules.size(),
-            "The weak module cannot have extra dependencies.");
+            chunk.getAllDependencies().size() == allOtherChunks.size(),
+            "The weak chunk cannot have extra dependencies.");
         break;
       }
     }
-    if (hasWeakModule) {
-      // All weak files (and only weak files) should be in the weak module.
+    if (hasWeakChunk) {
+      // All weak files (and only weak files) should be in the weak chunk.
       List<String> misplacedWeakFiles = new ArrayList<>();
       List<String> misplacedStrongFiles = new ArrayList<>();
-      for (JSChunk module : modulesInDepOrder) {
-        boolean isWeakModule = module.getName().equals(JSChunk.WEAK_MODULE_NAME);
-        for (CompilerInput input : module.getInputs()) {
-          if (isWeakModule && !input.getSourceFile().isWeak()) {
+      for (JSChunk chunk : chunksInDepOrder) {
+        boolean isWeakChunk = chunk.getName().equals(JSChunk.WEAK_CHUNK_NAME);
+        for (CompilerInput input : chunk.getInputs()) {
+          if (isWeakChunk && !input.getSourceFile().isWeak()) {
             misplacedStrongFiles.add(input.getSourceFile().getName());
-          } else if (!isWeakModule && input.getSourceFile().isWeak()) {
+          } else if (!isWeakChunk && input.getSourceFile().isWeak()) {
             misplacedWeakFiles.add(
-                input.getSourceFile().getName() + " (in module " + module.getName() + ")");
+                input.getSourceFile().getName() + " (in chunk " + chunk.getName() + ")");
           }
         }
       }
       if (!(misplacedStrongFiles.isEmpty() && misplacedWeakFiles.isEmpty())) {
-        StringBuilder sb =
-            new StringBuilder("A weak module exists but some sources are misplaced.");
+        StringBuilder sb = new StringBuilder("A weak chunk exists but some sources are misplaced.");
         if (!misplacedStrongFiles.isEmpty()) {
-          sb.append("\nFound these strong sources in the weak module:\n  ")
+          sb.append("\nFound these strong sources in the weak chunk:\n  ")
               .append(Joiner.on("\n  ").join(misplacedStrongFiles));
         }
         if (!misplacedWeakFiles.isEmpty()) {
-          sb.append("\nFound these weak sources in other modules:\n  ")
+          sb.append("\nFound these weak sources in other chunks:\n  ")
               .append(Joiner.on("\n  ").join(misplacedWeakFiles));
         }
         throw new IllegalStateException(sb.toString());
       }
     } else {
-      JSChunk weakModule = new JSChunk(JSChunk.WEAK_MODULE_NAME);
-      for (JSChunk module : modulesInDepOrder) {
-        weakModule.addDependency(module);
+      JSChunk weakChunk = new JSChunk(JSChunk.WEAK_CHUNK_NAME);
+      for (JSChunk chunk : chunksInDepOrder) {
+        weakChunk.addDependency(chunk);
       }
-      modulesInDepOrder = new ArrayList<>(modulesInDepOrder);
-      modulesInDepOrder.add(weakModule);
+      chunksInDepOrder = new ArrayList<>(chunksInDepOrder);
+      chunksInDepOrder.add(weakChunk);
     }
-    return modulesInDepOrder;
+    return chunksInDepOrder;
   }
 
   private BitSet[] initTransitiveDepsBitSets() {
-    BitSet[] array = new BitSet[modules.length];
-    for (int moduleIndex = 0; moduleIndex < modules.length; ++moduleIndex) {
-      final JSChunk module = modules[moduleIndex];
-      BitSet selfPlusTransitiveDeps = new BitSet(moduleIndex + 1);
-      array[moduleIndex] = selfPlusTransitiveDeps;
-      selfPlusTransitiveDeps.set(moduleIndex);
-      // O(moduleIndex * log64(moduleIndex))
-      for (JSChunk dep : module.getDependencies()) {
-        // Add this dependency and all of its dependencies to the current module.
-        // O(log64(moduleIndex))
+    BitSet[] array = new BitSet[chunks.length];
+    for (int chunkIndex = 0; chunkIndex < chunks.length; ++chunkIndex) {
+      final JSChunk chunk = chunks[chunkIndex];
+      BitSet selfPlusTransitiveDeps = new BitSet(chunkIndex + 1);
+      array[chunkIndex] = selfPlusTransitiveDeps;
+      selfPlusTransitiveDeps.set(chunkIndex);
+      // O(chunkIndex * log64(chunkIndex))
+      for (JSChunk dep : chunk.getDependencies()) {
+        // Add this dependency and all of its dependencies to the current chunk.
+        // O(log64(chunkIndex))
         selfPlusTransitiveDeps.or(array[dep.getIndex()]);
       }
     }
@@ -252,15 +247,15 @@ public final class JSChunkGraph implements Serializable {
   }
 
   private int[] initSubtreeSize() {
-    int[] subtreeSize = new int[modules.length];
-    for (int dependentIndex = 0; dependentIndex < modules.length; ++dependentIndex) {
+    int[] subtreeSize = new int[chunks.length];
+    for (int dependentIndex = 0; dependentIndex < chunks.length; ++dependentIndex) {
       BitSet dependencies = selfPlusTransitiveDeps[dependentIndex];
       // Iterating backward through the bitset is slightly more efficient, since it avoids
-      // considering later modules, which this one cannot depend on.
+      // considering later chunks, which this one cannot depend on.
       for (int requiredIndex = dependentIndex;
           requiredIndex >= 0;
           requiredIndex = dependencies.previousSetBit(requiredIndex - 1)) {
-        subtreeSize[requiredIndex] += 1; // Count dependent in required module's subtree.
+        subtreeSize[requiredIndex] += 1; // Count dependent in required chunk's subtree.
       }
     }
     return subtreeSize;
@@ -268,31 +263,31 @@ public final class JSChunkGraph implements Serializable {
 
   /** Gets an iterable over all input source files in dependency order. */
   Iterable<CompilerInput> getAllInputs() {
-    return Iterables.concat(Iterables.transform(Arrays.asList(modules), JSChunk::getInputs));
+    return Iterables.concat(Iterables.transform(Arrays.asList(chunks), JSChunk::getInputs));
   }
 
   /** Gets the total number of input source files. */
   int getInputCount() {
     int count = 0;
-    for (JSChunk module : modules) {
-      count += module.getInputCount();
+    for (JSChunk chunk : chunks) {
+      count += chunk.getInputCount();
     }
     return count;
   }
 
-  /** Gets an iterable over all modules in dependency order. */
-  Iterable<JSChunk> getAllModules() {
-    return Arrays.asList(modules);
+  /** Gets an iterable over all chunks in dependency order. */
+  Iterable<JSChunk> getAllChunks() {
+    return Arrays.asList(chunks);
   }
 
   /**
-   * Gets a single module by name.
+   * Gets a single chunk by name.
    *
-   * @return The module, or null if no such module exists.
+   * @return The chunk, or null if no such chunk exists.
    */
   @Nullable
-  JSChunk getModuleByName(String name) {
-    for (JSChunk m : modules) {
+  JSChunk getChunkByName(String name) {
+    for (JSChunk m : chunks) {
       if (m.getName().equals(name)) {
         return m;
       }
@@ -300,63 +295,59 @@ public final class JSChunkGraph implements Serializable {
     return null;
   }
 
-  /** Gets all modules indexed by name. */
-  Map<String, JSChunk> getModulesByName() {
-    Map<String, JSChunk> result = new HashMap<>();
-    for (JSChunk m : modules) {
+  /** Gets all chunks indexed by name. */
+  Map<String, JSChunk> getChunksByName() {
+    Map<String, JSChunk> result = new LinkedHashMap<>();
+    for (JSChunk m : chunks) {
       result.put(m.getName(), m);
     }
     return result;
   }
 
-  /**
-   * Gets the total number of modules.
-   */
-  int getModuleCount() {
-    return modules.length;
+  /** Gets the total number of chunks. */
+  int getChunkCount() {
+    return chunks.length;
   }
 
-  /** Gets the root module. */
-  JSChunk getRootModule() {
-    return Iterables.getOnlyElement(modulesByDepth.get(0));
+  /** Gets the root chunk. */
+  JSChunk getRootChunk() {
+    return Iterables.getOnlyElement(chunksByDepth.get(0));
   }
 
   /**
-   * Returns a JSON representation of the JSChunkGraph. Specifically a JsonArray of "Modules" where
-   * each module has a - "name" - "dependencies" (list of module names) - "transitive-dependencies"
-   * (list of module names, deepest first) - "inputs" (list of file names)
+   * Returns a JSON representation of the JSChunkGraph. Specifically a JsonArray of "Chunks" where
+   * each chunk has a - "name" - "dependencies" (list of chunk names) - "transitive-dependencies"
+   * (list of chunk names, deepest first) - "inputs" (list of file names)
    *
-   * @return List of module JSONObjects.
+   * @return List of chunk JSONObjects.
    */
-  @GwtIncompatible("com.google.gson")
   JsonArray toJson() {
-    JsonArray modules = new JsonArray();
-    for (JSChunk module : getAllModules()) {
+    JsonArray chunks = new JsonArray();
+    for (JSChunk chunk : getAllChunks()) {
       JsonObject node = new JsonObject();
-        node.add("name", new JsonPrimitive(module.getName()));
+      node.add("name", new JsonPrimitive(chunk.getName()));
         JsonArray deps = new JsonArray();
         node.add("dependencies", deps);
-      for (JSChunk m : module.getDependencies()) {
+      for (JSChunk m : chunk.getDependencies()) {
           deps.add(new JsonPrimitive(m.getName()));
         }
         JsonArray transitiveDeps = new JsonArray();
         node.add("transitive-dependencies", transitiveDeps);
-      for (JSChunk m : getTransitiveDepsDeepestFirst(module)) {
+      for (JSChunk m : getTransitiveDepsDeepestFirst(chunk)) {
           transitiveDeps.add(new JsonPrimitive(m.getName()));
         }
         JsonArray inputs = new JsonArray();
         node.add("inputs", inputs);
-        for (CompilerInput input : module.getInputs()) {
-          inputs.add(new JsonPrimitive(
-              input.getSourceFile().getOriginalPath()));
+      for (CompilerInput input : chunk.getInputs()) {
+        inputs.add(new JsonPrimitive(input.getSourceFile().getName()));
         }
-        modules.add(node);
+      chunks.add(node);
     }
-    return modules;
+    return chunks;
   }
 
   /**
-   * Determines whether this module depends on a given module. Note that a module never depends on
+   * Determines whether this chunk depends on a given chunk. Note that a chunk never depends on
    * itself, as that dependency would be cyclic.
    */
   public boolean dependsOn(JSChunk src, JSChunk m) {
@@ -364,44 +355,43 @@ public final class JSChunkGraph implements Serializable {
   }
 
   /**
-   * Finds the module with the fewest transitive dependents on which all of the given modules depend
-   * and that is a subtree of the given parent module tree.
+   * Finds the chunk with the fewest transitive dependents on which all of the given chunks depend
+   * and that is a subtree of the given parent chunk tree.
    *
-   * <p>If no such subtree can be found, the parent module is returned.
+   * <p>If no such subtree can be found, the parent chunk is returned.
    *
-   * <p>If multiple candidates have the same number of dependents, the module farthest down in the
-   * total ordering of modules will be chosen.
+   * <p>If multiple candidates have the same number of dependents, the chunk farthest down in the
+   * total ordering of chunks will be chosen.
    *
-   * @param parentTree module on which the result must depend
-   * @param dependentModules indices of modules to consider
-   * @return A module on which all of the argument modules depend
+   * @param parentTree chunk on which the result must depend
+   * @param dependentChunks indices of chunks to consider
+   * @return A chunk on which all of the argument chunks depend
    */
-  public JSChunk getSmallestCoveringSubtree(JSChunk parentTree, BitSet dependentModules) {
-    checkState(!dependentModules.isEmpty());
+  public JSChunk getSmallestCoveringSubtree(JSChunk parentTree, BitSet dependentChunks) {
+    checkState(!dependentChunks.isEmpty());
 
-    // Candidate modules are those that all of the given dependent modules depend on, including
-    // themselves. The dependent module with the smallest index might be our answer, if all
-    // the other modules depend on it.
-    int minDependentModuleIndex = modules.length;
-    final BitSet candidates = new BitSet(modules.length);
-    candidates.set(0, modules.length, true);
-    for (int dependentIndex = dependentModules.nextSetBit(0);
+    // Candidate chunks are those that all of the given dependent chunks depend on, including
+    // themselves. The dependent chunk with the smallest index might be our answer, if all
+    // the other chunks depend on it.
+    int minDependentChunkIndex = chunks.length;
+    final BitSet candidates = new BitSet(chunks.length);
+    candidates.set(0, chunks.length, true);
+    for (int dependentIndex = dependentChunks.nextSetBit(0);
         dependentIndex >= 0;
-        dependentIndex = dependentModules.nextSetBit(dependentIndex + 1)) {
-      minDependentModuleIndex = min(minDependentModuleIndex, dependentIndex);
+        dependentIndex = dependentChunks.nextSetBit(dependentIndex + 1)) {
+      minDependentChunkIndex = min(minDependentChunkIndex, dependentIndex);
       candidates.and(selfPlusTransitiveDeps[dependentIndex]);
     }
-    checkState(
-        !candidates.isEmpty(), "No common dependency found for %s", dependentModules);
+    checkState(!candidates.isEmpty(), "No common dependency found for %s", dependentChunks);
 
-    // All candidates must have an index <= the smallest dependent module index.
-    // Work backwards through the candidates starting with the dependent module with the smallest
-    // index. For each candidate, we'll remove all of the modules it depends on from consideration,
+    // All candidates must have an index <= the smallest dependent chunk index.
+    // Work backwards through the candidates starting with the dependent chunk with the smallest
+    // index. For each candidate, we'll remove all of the chunks it depends on from consideration,
     // since they must all have larger subtrees than the one we're considering.
     int parentTreeIndex = parentTree.getIndex();
     // default to parent tree if we don't find anything better
     int bestCandidateIndex = parentTreeIndex;
-    for (int candidateIndex = candidates.previousSetBit(minDependentModuleIndex);
+    for (int candidateIndex = candidates.previousSetBit(minDependentChunkIndex);
         candidateIndex >= 0;
         candidateIndex = candidates.previousSetBit(candidateIndex - 1)) {
 
@@ -414,28 +404,29 @@ public final class JSChunkGraph implements Serializable {
         }
       } // eliminate candidates that are not a subtree of parentTree
     }
-    return modules[bestCandidateIndex];
+    return chunks[bestCandidateIndex];
   }
 
   /**
-   * Finds the deepest common dependency of two modules, not including the two modules themselves.
+   * Finds the deepest common dependency of two chunks, not including the two chunks themselves.
    *
-   * @param m1 A module in this graph
-   * @param m2 A module in this graph
+   * @param m1 A chunk in this graph
+   * @param m2 A chunk in this graph
    * @return The deepest common dep of {@code m1} and {@code m2}, or null if they have no common
    *     dependencies
    */
+  @Nullable
   JSChunk getDeepestCommonDependency(JSChunk m1, JSChunk m2) {
     int m1Depth = m1.getDepth();
     int m2Depth = m2.getDepth();
     // According our definition of depth, the result must have a strictly
     // smaller depth than either m1 or m2.
     for (int depth = min(m1Depth, m2Depth) - 1; depth >= 0; depth--) {
-      List<JSChunk> modulesAtDepth = modulesByDepth.get(depth);
-      // Look at the modules at this depth in reverse order, so that we use the
-      // original ordering of the modules to break ties (later meaning deeper).
-      for (int i = modulesAtDepth.size() - 1; i >= 0; i--) {
-        JSChunk m = modulesAtDepth.get(i);
+      List<JSChunk> chunksAtDepth = chunksByDepth.get(depth);
+      // Look at the chunks at this depth in reverse order, so that we use the
+      // original ordering of the chunks to break ties (later meaning deeper).
+      for (int i = chunksAtDepth.size() - 1; i >= 0; i--) {
+        JSChunk m = chunksAtDepth.get(i);
         if (dependsOn(m1, m) && dependsOn(m2, m)) {
           return m;
         }
@@ -445,10 +436,10 @@ public final class JSChunkGraph implements Serializable {
   }
 
   /**
-   * Finds the deepest common dependency of two modules, including the modules themselves.
+   * Finds the deepest common dependency of two chunks, including the chunks themselves.
    *
-   * @param m1 A module in this graph
-   * @param m2 A module in this graph
+   * @param m1 A chunk in this graph
+   * @param m2 A chunk in this graph
    * @return The deepest common dep of {@code m1} and {@code m2}, or null if they have no common
    *     dependencies
    */
@@ -462,9 +453,9 @@ public final class JSChunkGraph implements Serializable {
     return getDeepestCommonDependency(m1, m2);
   }
 
-  /** Returns the deepest common dependency of the given modules. */
-  public JSChunk getDeepestCommonDependencyInclusive(Collection<JSChunk> modules) {
-    Iterator<JSChunk> iter = modules.iterator();
+  /** Returns the deepest common dependency of the given chunks. */
+  public JSChunk getDeepestCommonDependencyInclusive(Collection<JSChunk> chunks) {
+    Iterator<JSChunk> iter = chunks.iterator();
     JSChunk dep = iter.next();
     while (iter.hasNext()) {
       dep = getDeepestCommonDependencyInclusive(dep, iter.next());
@@ -473,46 +464,46 @@ public final class JSChunkGraph implements Serializable {
   }
 
   /**
-   * Creates an iterable over the transitive dependencies of module {@code m} in a non-increasing
-   * depth ordering. The result does not include the module {@code m}.
+   * Creates an iterable over the transitive dependencies of chunk {@code m} in a non-increasing
+   * depth ordering. The result does not include the chunk {@code m}.
    *
-   * @param m A module in this graph
-   * @return The transitive dependencies of module {@code m}
+   * @param m A chunk in this graph
+   * @return The transitive dependencies of chunk {@code m}
    */
   @VisibleForTesting
   List<JSChunk> getTransitiveDepsDeepestFirst(JSChunk m) {
     return InverseDepthComparator.INSTANCE.sortedCopy(getTransitiveDeps(m));
   }
 
-  /** Returns the transitive dependencies of the module. */
+  /** Returns the transitive dependencies of the chunk. */
   private Set<JSChunk> getTransitiveDeps(JSChunk m) {
     return dependencyMap.computeIfAbsent(m, JSChunk::getAllDependencies);
   }
 
   /**
-   * Moves all sources that have {@link SourceKind#WEAK} into the weak module so that they may be
+   * Moves all sources that have {@link SourceKind#WEAK} into the weak chunk so that they may be
    * pruned later.
    */
-  private static void moveMarkedWeakSources(JSChunk weakModule, Iterable<CompilerInput> inputs) {
-    checkNotNull(weakModule);
+  private static void moveMarkedWeakSources(JSChunk weakChunk, Iterable<CompilerInput> inputs) {
+    checkNotNull(weakChunk);
     ImmutableList<CompilerInput> allInputs = ImmutableList.copyOf(inputs);
     for (CompilerInput i : allInputs) {
       if (i.getSourceFile().isWeak()) {
-        JSChunk existingModule = i.getChunk();
-        if (existingModule == weakModule) {
+        JSChunk existingChunk = i.getChunk();
+        if (existingChunk == weakChunk) {
           continue;
         }
-        if (existingModule != null) {
-          existingModule.remove(i);
+        if (existingChunk != null) {
+          existingChunk.remove(i);
         }
-        weakModule.add(i);
+        weakChunk.add(i);
       }
     }
   }
 
   /**
    * Apply the dependency options to the list of sources, returning a new source list re-ordering
-   * and dropping files as necessary. This module graph will be updated to reflect the new list.
+   * and dropping files as necessary. This chunk graph will be updated to reflect the new list.
    *
    * <p>See {@link DependencyOptions} for more information on how this works.
    *
@@ -520,30 +511,30 @@ public final class JSChunkGraph implements Serializable {
    */
   public ImmutableList<CompilerInput> manageDependencies(
       AbstractCompiler compiler, DependencyOptions dependencyOptions)
-      throws MissingProvideException, MissingModuleException {
+      throws MissingProvideException, MissingChunkException {
 
     // Make a copy since we're going to mutate the graph below.
-    List<CompilerInput> originalInputs = ImmutableList.copyOf(getAllInputs());
+    ImmutableList<CompilerInput> originalInputs = ImmutableList.copyOf(getAllInputs());
 
-    SortedDependencies<CompilerInput> sorter = new Es6SortedDependencies<>(originalInputs);
+    SortedDependencies<CompilerInput> sorter = new SortedDependencies<>(originalInputs);
 
     Set<CompilerInput> entryPointInputs =
         createEntryPointInputs(compiler, dependencyOptions, getAllInputs(), sorter);
 
     // Build a map of symbols to their source file(s). While having multiple source files is invalid
-    // we leave that up to typechecking so that we avoid arbitarily picking a file.
-    HashMap<String, Set<CompilerInput>> inputsByProvide = new HashMap<>();
+    // we leave that up to typechecking so that we avoid arbitrarily picking a file.
+    LinkedHashMap<String, Set<CompilerInput>> inputsByProvide = new LinkedHashMap<>();
     for (CompilerInput input : originalInputs) {
       for (String provide : input.getKnownProvides()) {
         inputsByProvide.computeIfAbsent(provide, (String k) -> new LinkedHashSet<>());
         inputsByProvide.get(provide).add(input);
       }
-      String moduleName = input.getPath().toModuleName();
-      inputsByProvide.computeIfAbsent(moduleName, (String k) -> new LinkedHashSet<>());
-      inputsByProvide.get(moduleName).add(input);
+      String chunkName = input.getPath().toModuleName();
+      inputsByProvide.computeIfAbsent(chunkName, (String k) -> new LinkedHashSet<>());
+      inputsByProvide.get(chunkName).add(input);
     }
 
-    // Dynamically imported files must be added to the module graph, but
+    // Dynamically imported files must be added to the chunk graph, but
     // they should not be ordered ahead of the files that import them.
     // We add them as entry points to ensure they get included.
     for (CompilerInput input : originalInputs) {
@@ -554,38 +545,47 @@ public final class JSChunkGraph implements Serializable {
       }
     }
 
-    // The order of inputs, sorted independently of modules.
-    List<CompilerInput> absoluteOrder =
+    // For goog.requireDynamic() imported files.
+    for (CompilerInput input : originalInputs) {
+      for (String require : input.getRequireDynamicImports()) {
+        if (inputsByProvide.containsKey(require)) {
+          entryPointInputs.addAll(inputsByProvide.get(require));
+        }
+      }
+    }
+
+    // The order of inputs, sorted independently of chunks.
+    ImmutableList<CompilerInput> absoluteOrder =
         sorter.getStrongDependenciesOf(originalInputs, dependencyOptions.shouldSort());
 
-    // Figure out which sources *must* be in each module.
-    ListMultimap<JSChunk, CompilerInput> entryPointInputsPerModule = LinkedListMultimap.create();
+    // Figure out which sources *must* be in each chunk.
+    ListMultimap<JSChunk, CompilerInput> entryPointInputsPerChunk = LinkedListMultimap.create();
     for (CompilerInput input : entryPointInputs) {
-      JSChunk module = input.getChunk();
-      checkNotNull(module);
-      entryPointInputsPerModule.put(module, input);
+      JSChunk chunk = input.getChunk();
+      checkNotNull(chunk);
+      entryPointInputsPerChunk.put(chunk, input);
     }
 
-    // Clear the modules of their inputs. This also nulls out the input's reference to its module.
-    for (JSChunk module : getAllModules()) {
-      module.removeAll();
+    // Clear the chunks of their inputs. This also nulls out the input's reference to its chunk.
+    for (JSChunk chunk : getAllChunks()) {
+      chunk.removeAll();
     }
 
-    // Figure out which sources *must* be in each module, or in one
-    // of that module's dependencies.
+    // Figure out which sources *must* be in each chunk, or in one
+    // of that chunk's dependencies.
     List<CompilerInput> orderedInputs = new ArrayList<>();
-    Set<CompilerInput> reachedInputs = new HashSet<>();
+    Set<CompilerInput> reachedInputs = new LinkedHashSet<>();
 
-    for (JSChunk module : modules) {
+    for (JSChunk chunk : chunks) {
       List<CompilerInput> transitiveClosure;
       // Prefer a depth first ordering of dependencies from entry points.
       // Always orders in a deterministic fashion regardless of the order of provided inputs
       // given the same entry points in the same order.
       if (dependencyOptions.shouldSort() && dependencyOptions.shouldPrune()) {
         transitiveClosure = new ArrayList<>();
-        // We need the ful set of dependencies for each module, so start with the full input set
-        Set<CompilerInput> inputsNotYetReached = new HashSet<>(originalInputs);
-        for (CompilerInput entryPoint : entryPointInputsPerModule.get(module)) {
+        // We need the ful set of dependencies for each chunk, so start with the full input set
+        Set<CompilerInput> inputsNotYetReached = new LinkedHashSet<>(originalInputs);
+        for (CompilerInput entryPoint : entryPointInputsPerChunk.get(chunk)) {
           transitiveClosure.addAll(
               getDepthFirstDependenciesOf(entryPoint, inputsNotYetReached, inputsByProvide));
         }
@@ -600,7 +600,7 @@ public final class JSChunkGraph implements Serializable {
         // Ordered result varies based on the original order of inputs.
         transitiveClosure =
             sorter.getStrongDependenciesOf(
-                entryPointInputsPerModule.get(module), dependencyOptions.shouldSort());
+                entryPointInputsPerChunk.get(chunk), dependencyOptions.shouldSort());
       }
       for (CompilerInput input : transitiveClosure) {
         if (dependencyOptions.shouldPrune()
@@ -610,52 +610,51 @@ public final class JSChunkGraph implements Serializable {
               JSError.make(
                   WEAK_FILE_REACHABLE_FROM_ENTRY_POINT_ERROR, input.getSourceFile().getName()));
         }
-        JSChunk oldModule = input.getChunk();
-        if (oldModule == null) {
-          input.setModule(module);
+        JSChunk oldChunk = input.getChunk();
+        if (oldChunk == null) {
+          input.setChunk(chunk);
         } else {
-          input.setModule(null);
-          input.setModule(
-              getDeepestCommonDependencyInclusive(oldModule, module));
+          input.setChunk(null);
+          input.setChunk(getDeepestCommonDependencyInclusive(oldChunk, chunk));
         }
       }
     }
     if (!(dependencyOptions.shouldSort() && dependencyOptions.shouldPrune())
-        || entryPointInputsPerModule.isEmpty()) {
+        || entryPointInputsPerChunk.isEmpty()) {
       orderedInputs = absoluteOrder;
     }
 
-    JSChunk weakModule = getModuleByName(JSChunk.WEAK_MODULE_NAME);
-    checkNotNull(weakModule);
+    JSChunk weakChunk = getChunkByName(JSChunk.WEAK_CHUNK_NAME);
+    checkNotNull(weakChunk);
     // Mark all sources that are detected as weak.
     if (dependencyOptions.shouldPrune()) {
-      List<CompilerInput> weakInputs = sorter.getSortedWeakDependenciesOf(orderedInputs);
+      ImmutableList<CompilerInput> weakInputs = sorter.getSortedWeakDependenciesOf(orderedInputs);
       for (CompilerInput i : weakInputs) {
-        // Add weak inputs to the weak module in dependency order. moveMarkedWeakSources will move
+        // Add weak inputs to the weak chunk in dependency order. moveMarkedWeakSources will move
         // in command line flag order.
         checkState(i.getChunk() == null);
         i.getSourceFile().setKind(SourceKind.WEAK);
-        i.setModule(weakModule);
-        weakModule.add(i);
+        i.setChunk(weakChunk);
+        weakChunk.add(i);
       }
     } else {
       // Only move sourced marked as weak if the compiler isn't doing its own detection.
-      moveMarkedWeakSources(weakModule, originalInputs);
+      moveMarkedWeakSources(weakChunk, originalInputs);
     }
 
-    // All the inputs are pointing to the modules that own them. Yeah!
-    // Update the modules to reflect this.
+    // All the inputs are pointing to the chunks that own them. Yeah!
+    // Update the chunks to reflect this.
     for (CompilerInput input : orderedInputs) {
-      JSChunk module = input.getChunk();
-      if (module != null && !module.getInputs().contains(input)) {
-        module.add(input);
+      JSChunk chunk = input.getChunk();
+      if (chunk != null && chunk.getByName(input.getName()) == null) {
+        chunk.add(input);
       }
     }
 
     // Now, generate the sorted result.
     ImmutableList.Builder<CompilerInput> result = ImmutableList.builder();
-    for (JSChunk module : getAllModules()) {
-      result.addAll(module.getInputs());
+    for (JSChunk chunk : getAllChunks()) {
+      result.addAll(chunk.getInputs());
     }
 
     return result.build();
@@ -694,9 +693,9 @@ public final class JSChunkGraph implements Serializable {
       DependencyOptions dependencyOptions,
       Iterable<CompilerInput> inputs,
       SortedDependencies<CompilerInput> sorter)
-      throws MissingModuleException, MissingProvideException {
+      throws MissingChunkException, MissingProvideException {
     Set<CompilerInput> entryPointInputs = new LinkedHashSet<>();
-    Map<String, JSChunk> modulesByName = getModulesByName();
+    Map<String, JSChunk> chunksByName = getChunksByName();
     if (dependencyOptions.shouldPrune()) {
       // Some files implicitly depend on base.js without actually requiring anything.
       // So we always treat it as the first entry point to ensure it's ordered correctly.
@@ -728,12 +727,12 @@ public final class JSChunkGraph implements Serializable {
               entryPointInput = sorter.getInputProviding(entryPoint.getName());
             }
           } else {
-            JSChunk module = modulesByName.get(entryPoint.getModuleName());
-            if (module == null) {
-              throw new MissingModuleException(entryPoint.getModuleName());
+            JSChunk chunk = chunksByName.get(entryPoint.getModuleName());
+            if (chunk == null) {
+              throw new MissingChunkException(entryPoint.getModuleName());
             } else {
               entryPointInput = sorter.getInputProviding(entryPoint.getClosureNamespace());
-              entryPointInput.overrideModule(module);
+              entryPointInput.overrideModule(chunk);
             }
           }
         } catch (MissingProvideException e) {
@@ -757,19 +756,19 @@ public final class JSChunkGraph implements Serializable {
   @SuppressWarnings("unused")
   LinkedDirectedGraph<JSChunk, String> toGraphvizGraph() {
     LinkedDirectedGraph<JSChunk, String> graphViz = LinkedDirectedGraph.create();
-    for (JSChunk module : getAllModules()) {
-      graphViz.createNode(module);
-      for (JSChunk dep : module.getDependencies()) {
+    for (JSChunk chunk : getAllChunks()) {
+      graphViz.createNode(chunk);
+      for (JSChunk dep : chunk.getDependencies()) {
         graphViz.createNode(dep);
-        graphViz.connect(module, "->", dep);
+        graphViz.connect(chunk, "->", dep);
       }
     }
     return graphViz;
   }
 
   /**
-   * A module depth comparator that considers a deeper module to be "less than" a shallower module.
-   * Uses module names to consistently break ties.
+   * A chunk depth comparator that considers a deeper chunk to be "less than" a shallower chunk.
+   * Uses chunk names to consistently break ties.
    */
   private static final class InverseDepthComparator extends Ordering<JSChunk> {
     static final InverseDepthComparator INSTANCE = new InverseDepthComparator();
@@ -790,34 +789,34 @@ public final class JSChunkGraph implements Serializable {
   }
 
   /**
-   * Exception class for declaring when the modules being fed into a JSChunkGraph as input aren't in
+   * Exception class for declaring when the chunks being fed into a JSChunkGraph as input aren't in
    * dependence order, and so can't be processed for caching of various dependency-related queries.
    */
-  protected static class ModuleDependenceException extends IllegalArgumentException {
+  protected static class ChunkDependenceException extends IllegalArgumentException {
     private static final long serialVersionUID = 1;
 
-    private final JSChunk module;
-    private final JSChunk dependentModule;
+    private final JSChunk chunk;
+    private final JSChunk dependentChunk;
 
-    protected ModuleDependenceException(String message, JSChunk module, JSChunk dependentModule) {
+    protected ChunkDependenceException(String message, JSChunk chunk, JSChunk dependentChunk) {
       super(message);
-      this.module = module;
-      this.dependentModule = dependentModule;
+      this.chunk = chunk;
+      this.dependentChunk = dependentChunk;
     }
 
-    public JSChunk getModule() {
-      return module;
+    public JSChunk getChunk() {
+      return chunk;
     }
 
-    public JSChunk getDependentModule() {
-      return dependentModule;
+    public JSChunk getDependentChunk() {
+      return dependentChunk;
     }
   }
 
   /** Another exception class */
-  public static class MissingModuleException extends Exception {
-    MissingModuleException(String moduleName) {
-      super(moduleName);
+  public static class MissingChunkException extends Exception {
+    MissingChunkException(String chunkName) {
+      super(chunkName);
     }
   }
 

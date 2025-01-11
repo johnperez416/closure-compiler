@@ -17,6 +17,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.javascript.jscomp.AstFactory.type;
 
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Preconditions;
@@ -30,7 +31,7 @@ import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.QualifiedName;
 import com.google.javascript.rhino.jstype.JSType;
 import java.util.List;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** Centralized location for determining how to rename modules. */
 final class ModuleRenaming {
@@ -86,7 +87,8 @@ final class ModuleRenaming {
     return getGlobalName(binding.originatingExport());
   }
 
-  private static JSType getNameRootType(String qname, @Nullable TypedScope globalTypedScope) {
+  private static @Nullable JSType getNameRootType(
+      String qname, @Nullable TypedScope globalTypedScope) {
     if (globalTypedScope == null) {
       return null;
     }
@@ -166,16 +168,16 @@ final class ModuleRenaming {
   abstract static class GlobalizedModuleName {
     abstract QualifiedName aliasName();
     // The type of the root of `aliasName`, as it may not always exist in the scope yet.
-    @Nullable
-    abstract JSType rootNameType();
+    abstract @Nullable JSType rootNameType();
 
     /** Creates a GETPROP chain with type information representing this name */
     Node toQname(AstFactory astFactory) {
-      Node rootName = astFactory.createName(this.aliasName().getRoot(), this.rootNameType());
+      Node rootName = astFactory.createName(this.aliasName().getRoot(), type(this.rootNameType()));
       if (this.aliasName().isSimple()) {
         return rootName;
       }
-      return astFactory.createGetProps(rootName, Iterables.skip(this.aliasName().components(), 1));
+      return astFactory.createGetPropsWithoutColors(
+          rootName, Iterables.skip(this.aliasName().components(), 1));
     }
 
     /**

@@ -24,10 +24,10 @@ import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeNative;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** Generates goog.exportSymbol/goog.exportProperty for the @export annotation. */
 public class GenerateExports implements CompilerPass {
@@ -36,13 +36,13 @@ public class GenerateExports implements CompilerPass {
 
   private final AbstractCompiler compiler;
 
-  @Nullable private final String exportSymbolFunction;
+  private final @Nullable String exportSymbolFunction;
 
-  @Nullable private final String exportPropertyFunction;
+  private final @Nullable String exportPropertyFunction;
 
   private final boolean allowNonGlobalExports;
 
-  private final Set<String> exportedVariables = new HashSet<>();
+  private final Set<String> exportedVariables = new LinkedHashSet<>();
 
   static final DiagnosticType MISSING_EXPORT_CONVENTION =
       DiagnosticType.error(
@@ -87,8 +87,8 @@ public class GenerateExports implements CompilerPass {
 
   @Override
   public void process(Node externs, Node root) {
-    FindExportableNodes findExportableNodes = new FindExportableNodes(
-        compiler, allowNonGlobalExports);
+    FindExportableNodes findExportableNodes =
+        new FindExportableNodes(compiler, allowNonGlobalExports);
     NodeTraversal.traverse(compiler, root, findExportableNodes);
     Map<String, Node> exports = findExportableNodes.getExports();
     Map<Node, String> es6Exports = findExportableNodes.getEs6ClassExports();
@@ -234,7 +234,8 @@ public class GenerateExports implements CompilerPass {
     boolean isEs5StylePrototypeAssignment = false; // If this is a prototype property
     String propertyName = null;
 
-    if (context.getFirstChild().isGetProp()) { // e.g. `/** @export */ a.prototype.b = obj;`
+    Node child = context.getFirstChild();
+    if (child != null && child.isGetProp()) { // e.g. `/** @export */ a.prototype.b = obj;`
       Node node = context.getFirstChild(); // e.g. get `a.prototype.b`
       Node ownerNode = node.getFirstChild(); // e.g. get `a.prototype`
       methodOwnerName = ownerNode.getQualifiedName(); // e.g. get the string "a.prototype"
@@ -262,7 +263,7 @@ public class GenerateExports implements CompilerPass {
 
   private void addExportPropertyCall(
       String methodOwnerName, Node context, String export, String propertyName) {
-    // exportProperty(object, publicName, symbol);
+    // JS output: exportProperty(object, publicName, symbol);
     checkNotNull(methodOwnerName);
     Node call =
         IR.call(
@@ -278,13 +279,12 @@ public class GenerateExports implements CompilerPass {
                 context, exportPropertyFunction));
 
     Node expression = IR.exprResult(call).srcrefTreeIfMissing(context);
-    annotate(expression);
 
     addStatement(context, expression);
   }
 
   private void addExportSymbolCall(String export, Node context) {
-    // exportSymbol(publicPath, object);
+    // JS output: exportSymbol(publicPath, object);
     recordExportSymbol(export);
 
     Node call =
@@ -298,7 +298,6 @@ public class GenerateExports implements CompilerPass {
                 context, export));
 
     Node expression = IR.exprResult(call).srcrefTreeIfMissing(context);
-    annotate(expression);
 
     addStatement(context, expression);
   }
@@ -325,18 +324,12 @@ public class GenerateExports implements CompilerPass {
       }
     }
 
-    Node block = exprRoot.getParent();
     stmt.insertAfter(exprRoot);
     compiler.reportChangeToEnclosingScope(stmt);
   }
 
-  private void annotate(Node node) {
-    NodeTraversal.traverse(
-        compiler, node, new PrepareAst.PrepareAnnotations());
-  }
-
   /** Lazily create a "new" externs root for undeclared variables. */
   private Node getSynthesizedExternsRoot() {
-    return  compiler.getSynthesizedExternsInput().getAstRoot(compiler);
+    return compiler.getSynthesizedExternsInput().getAstRoot(compiler);
   }
 }

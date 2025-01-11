@@ -285,6 +285,191 @@ chrome.accessibilityFeatures.animationPolicy;
 
 /**
  * @const
+ * @see https://developer.chrome.com/extensions/browserAction.html
+ */
+chrome.action = {};
+
+
+/**
+ * @typedef {{
+ *   tabId: (number|undefined)
+ * }}
+ * @see https://developer.chrome.com/extensions/action#type-TabDetails
+ */
+chrome.action.TabDetails;
+
+
+/**
+ * @typedef {{
+ *   isOnToolbar: boolean
+ * }}
+ * @see https://developer.chrome.com/extensions/action#type-UserSettings
+ */
+chrome.action.UserSettings;
+
+
+/**
+ * @typedef {{
+ *   windowId: (number|undefined)
+ * }}
+ * @see https://developer.chrome.com/extensions/action#type-OpenPopupOptions
+ */
+chrome.action.OpenPopupOptions;
+
+
+/**
+ * @param {{
+ *   title: string,
+ *   tabId: (number|undefined)
+ * }} details
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-setTitle
+ */
+chrome.action.setTitle = function(details, opt_callback) {};
+
+
+/**
+ * @param {!chrome.action.TabDetails} details
+ * @param {function(string): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-getTitle
+ */
+chrome.action.getTitle = function(details, callback) {};
+
+
+/**
+ * @param {!chrome.browserAction.SetIconImageData} details
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-setIcon
+ */
+chrome.action.setIcon = function(details, opt_callback) {};
+
+
+/**
+ * @param {{
+ *   tabId: (number|undefined),
+ *   popup: string
+ * }} details
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-setPopup
+ */
+chrome.action.setPopup = function(details, opt_callback) {};
+
+
+/**
+ * @param {!chrome.action.TabDetails} details
+ * @param {function(string): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-getPopup
+ */
+chrome.action.getPopup = function(details, callback) {};
+
+
+/**
+ * @param {{
+ *   text: string,
+ *   tabId: (number|undefined)
+ * }} details
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-setBadgeText
+ */
+chrome.action.setBadgeText = function(details, opt_callback) {};
+
+
+/**
+ * @param {!chrome.action.TabDetails} details
+ * @param {function(string): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-getBadgeText
+ */
+chrome.action.getBadgeText = function(details, callback) {};
+
+
+/**
+ * @param {{
+ *   color: (string|!chrome.browserAction.ColorArray),
+ *   tabId: (number|undefined)
+ * }} details
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-setBadgeBackgroundColor
+ */
+chrome.action.setBadgeBackgroundColor = function(details, opt_callback) {};
+
+
+/**
+ * @param {!chrome.action.TabDetails} details
+ * @param {function(!chrome.browserAction.ColorArray): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-getBadgeBackgroundColor
+ */
+chrome.action.getBadgeBackgroundColor = function(details, callback) {};
+
+
+/**
+ * @param {number=} opt_tabId
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-enable
+ */
+chrome.action.enable = function(opt_tabId, opt_callback) {};
+
+
+/**
+ * @param {number=} opt_tabId
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-disable
+ */
+chrome.action.disable = function(opt_tabId, opt_callback) {};
+
+
+/**
+ * @param {?number|undefined} tabId
+ * @param {function(boolean): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-isEnabled
+ */
+chrome.action.isEnabled = function(tabId, callback) {};
+
+
+/**
+ * @param {function(!chrome.action.UserSettings): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-getUserSettings
+ */
+chrome.action.getUserSettings = function(callback) {};
+
+
+/**
+ * @param {?chrome.action.OpenPopupOptions|undefined} options
+ * @param {function(): void} callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/extensions/action#method-openPopup
+ */
+chrome.action.openPopup = function(options, callback) {};
+
+
+/**
+ * @interface
+ * @extends {ChromeBaseEvent<function(!Tab)>}
+ */
+chrome.action.ActionTabEvent = function() {};
+
+
+/**
+ * @type {!chrome.action.ActionTabEvent}
+ * @see https://developer.chrome.com/extensions/action#event-onClicked
+ */
+chrome.action.onClicked;
+
+
+/**
+ * @const
  * @see http://developer.chrome.com/apps/app.runtime.html
  */
 chrome.app.runtime = {};
@@ -2422,6 +2607,10 @@ chrome.enterprise.reportingPrivate.SettingValue = {
  *   screenLockSecured: chrome.enterprise.reportingPrivate.SettingValue,
  *   diskEncrypted: chrome.enterprise.reportingPrivate.SettingValue,
  *   macAddresses: (!Array<string>|undefined),
+ *   windowsMachineDomain: (!string|undefined),
+ *   windowsUserDomain: (!string|undefined),
+ *   securityPatchLevel: (!string|undefined),
+ *   secureBootEnabled: (!chrome.enterprise.reportingPrivate.SettingValue|undefined),
  * }}
  */
 chrome.enterprise.reportingPrivate.DeviceInfo;
@@ -2443,6 +2632,27 @@ chrome.enterprise.reportingPrivate.RealtimeUrlCheckMode = {
 };
 
 /**
+ * Represents possible states for the SafeBrowsingProtectionLevel policy
+ * @enum {number}
+ */
+chrome.enterprise.reportingPrivate.SafeBrowsingLevel = {
+  DISABLED: 0,
+  STANDARD: 0,
+  ENHANCED: 0,
+};
+
+/**
+ * Represents possible states for the PasswordProtectionWarningTrigger policy
+ * @enum {number}
+ */
+chrome.enterprise.reportingPrivate.PasswordProtectionTrigger = {
+  PASSWORD_PROTECTION_OFF: 0,
+  PASSWORD_REUSE: 0,
+  PHISHING_REUSE: 0,
+  POLICY_UNSET: 0,
+};
+
+/**
  * Type of the object returned by getContextInfo.
  * @typedef {?{
  *   browserAffiliationIds: (!Array<string>|undefined),
@@ -2453,6 +2663,15 @@ chrome.enterprise.reportingPrivate.RealtimeUrlCheckMode = {
  *   onSecurityEventProviders: (!Array<string>|undefined),
  *   realtimeUrlCheckMode: chrome.enterprise.reportingPrivate.RealtimeUrlCheckMode,
  *   browserVersion: string,
+ *   safeBrowsingProtectionLevel: chrome.enterprise.reportingPrivate.SafeBrowsingLevel,
+ *   siteIsolationEnabled: (!boolean|undefined),
+ *   builtInDnsClientEnabled: (!boolean|undefined),
+ *   passwordProtectionWarningTrigger: chrome.enterprise.reportingPrivate.PasswordProtectionTrigger,
+ *   chromeCleanupEnabled: (!boolean|undefined),
+ *   chromeRemoteDesktopAppBlocked: (!boolean|undefined),
+ *   thirdPartyBlockingEnabled: (!boolean|undefined),
+ *   osFirewall: chrome.enterprise.reportingPrivate.SettingValue,
+ *   systemDnsServers: (!Array<string>|undefined),
  * }}
  */
 chrome.enterprise.reportingPrivate.ContextInfo;
@@ -2490,6 +2709,48 @@ chrome.enterprise.reportingPrivate.Certificate;
  *     callback Called back with the response.
  */
 chrome.enterprise.reportingPrivate.getCertificate = function(url, callback) {};
+
+/**
+ * Reports a data masking event.
+ * Since Chrome 130.
+ * @param {!chrome.enterprise.reportingPrivate.DataMaskingEvent} event The
+ *     event to report.
+ * @param {(function(): void)=} callback Called back when this operation is
+ *     finished.
+ */
+chrome.enterprise.reportingPrivate.reportDataMaskingEvent = function(
+    event, callback) {};
+
+/**
+ * Data masking event.
+ * @typedef {?{
+ *   url: string,
+ *   eventResult: string,
+ *   triggeredRuleInfo:
+ * Array<chrome.enterprise.reportingPrivate.TriggeredRuleInfo>,
+ * }}
+ */
+chrome.enterprise.reportingPrivate.DataMaskingEvent;
+
+/**
+ * Triggered rule info.
+ * @typedef {?{
+ *   ruleId: string,
+ *   ruleName: string,
+ *   matchedDetectors: Array<chrome.enterprise.reportingPrivate.DetectorInfo>,
+ * }}
+ */
+chrome.enterprise.reportingPrivate.TriggeredRuleInfo;
+
+/**
+ * Detector info.
+ * @typedef {?{
+ *   detectorId: string,
+ *   displayName: string,
+ *   detectorType: string,
+ * }}
+ */
+chrome.enterprise.reportingPrivate.DetectorInfo;
 
 /**
  * @see https://developer.chrome.com/extensions/extension.html
@@ -2692,6 +2953,9 @@ chrome.runtime.Manifest.prototype.oauth2;
 /** @type {!Array<(string|!Object)>} */
 chrome.runtime.Manifest.prototype.permissions;
 
+/** @type {!chrome.runtime.Manifest.ExternallyConnectable|undefined} */
+chrome.runtime.Manifest.prototype.externally_connectable
+
 
 /**
  * App-only manifest field.
@@ -2729,8 +2993,24 @@ chrome.runtime.Manifest.Oauth2.prototype.scopes;
 
 
 /**
+ * externally_connectable info in the manifest.
+ * @see https://developer.chrome.com/extensions/externally_connectable
+ * @constructor
+ */
+chrome.runtime.Manifest.ExternallyConnectable = function() {};
+
+/** @type {!Array<string>|undefined} */
+chrome.runtime.Manifest.ExternallyConnectable.prototype.ids;
+
+/** @type {!Array<string>|undefined} */
+chrome.runtime.Manifest.ExternallyConnectable.prototype.matches;
+
+/** @type {boolean|undefined} */
+chrome.runtime.Manifest.ExternallyConnectable.prototype.accepts_tls_channel_id;
+
+
+/**
  * https://developer.chrome.com/extensions/runtime.html#method-getManifest
- * https://developer.chrome.com/apps/runtime#method-getManifest
  * @return {!chrome.runtime.Manifest} The full manifest file of the app or
  *     extension.
  */
@@ -2761,7 +3041,7 @@ chrome.runtime.reload = function() {};
 
 
 /**
- * @see https://developer.chrome.com/apps/runtime#method-requestUpdateCheck
+ * @see https://developer.chrome.com/extensions/runtime#method-requestUpdateCheck
  * @param {function(string, !{version: string}=): void} callback Called with
  *     "throttled", "no_update", or "update_available". If an update is
  *     available, the object contains more information about the available
@@ -2817,13 +3097,14 @@ chrome.runtime.sendNativeMessage = function(
 
 /**
  * The operating system chrome is running on.
- * @see https://developer.chrome.com/apps/runtime#type-PlatformOs
+ * @see https://developer.chrome.com/extensions/runtime#type-PlatformOs
  * @enum {string}
  */
 chrome.runtime.PlatformOs = {
   ANDROID: '',
   CROS: '',
   LINUX: '',
+  FUCHSIA: '',
   MAC: '',
   OPENBSD: '',
   WIN: '',
@@ -2832,7 +3113,7 @@ chrome.runtime.PlatformOs = {
 
 /**
  * The machine's processor architecture.
- * @see https://developer.chrome.com/apps/runtime#type-PlatformArch
+ * @see https://developer.chrome.com/extensions/runtime#type-PlatformArch
  * @enum {string}
  */
 chrome.runtime.PlatformArch = {
@@ -2847,7 +3128,7 @@ chrome.runtime.PlatformArch = {
 
 /**
  * The native client architecture.
- * @see https://developer.chrome.com/apps/runtime#type-PlatformNaclArch
+ * @see https://developer.chrome.com/extensions/runtime#type-PlatformNaclArch
  * @enum {string}
  */
 chrome.runtime.PlatformNaclArch = {
@@ -2860,7 +3141,7 @@ chrome.runtime.PlatformNaclArch = {
 
 
 /**
- * @see https://developer.chrome.com/apps/runtime#type-PlatformInfo
+ * @see https://developer.chrome.com/extensions/runtime#type-PlatformInfo
  * @typedef {{
  *   os: !chrome.runtime.PlatformOs,
  *   arch: !chrome.runtime.PlatformArch,
@@ -2897,6 +3178,10 @@ chrome.runtime.onConnectExternal;
 chrome.runtime.onConnectNative;
 
 
+/** @type {!chrome.runtime.PortEvent} */
+chrome.runtime.onUserScriptConnect;
+
+
 /** @type {!ChromeObjectEvent} */
 chrome.runtime.onInstalled;
 
@@ -2907,6 +3192,10 @@ chrome.runtime.onMessage;
 
 /** @type {!chrome.runtime.MessageSenderEvent} */
 chrome.runtime.onMessageExternal;
+
+
+/** @type {!chrome.runtime.MessageSenderEvent} */
+chrome.runtime.onUserScriptMessage;
 
 
 /** @type {!ChromeEvent} */
@@ -3473,6 +3762,32 @@ chrome.windows = {};
 
 
 /**
+ * Specifies what type of browser window to create.
+ * @see https://developer.chrome.com/docs/extensions/reference/windows/#type-CreateType
+ * @enum {string}
+ */
+chrome.windows.CreateType = {
+  NORMAL: '',
+  PANEL: '',
+  POPUP: '',
+};
+
+
+/**
+ * The type of browser window this is.
+ * @see https://developer.chrome.com/docs/extensions/reference/windows/#type-WindowType
+ * @enum {string}
+ */
+chrome.windows.WindowType = {
+  APP: '',
+  DEVTOOLS: '',
+  NORMAL: '',
+  PANEL: '',
+  POPUP: '',
+};
+
+
+/**
  * @param {Object=} opt_createData May have many keys to specify parameters.
  *     Or the callback.
  * @param {function(ChromeWindow): void=} opt_callback Callback.
@@ -3540,6 +3855,8 @@ chrome.windows.onCreated;
 /** @type {!ChromeEvent} */
 chrome.windows.onFocusChanged;
 
+/** @type {!ChromeEvent} */
+chrome.windows.onBoundsChanged;
 
 /** @type {!ChromeEvent} */
 chrome.windows.onRemoved;
@@ -5487,6 +5804,55 @@ chrome.mediaGalleries.onScanProgress;
 
 /**
  * @const
+ * @see https://developer.chrome.com/docs/extensions/reference/offscreen/
+ */
+chrome.offscreen = {};
+
+/**
+ * @typedef {{
+ *   justification: string,
+ *   reasons: !Array<!chrome.offscreen.Reason>,
+ *   url: string,
+ * }}
+ * @see https://developer.chrome.com/docs/extensions/reference/offscreen/#type-CreateParameters
+ */
+chrome.offscreen.CreateParameters;
+
+/**
+ * @enum {string}
+ * @see https://developer.chrome.com/docs/extensions/reference/offscreen/#type-Reason
+ */
+chrome.offscreen.Reason = {
+  TESTING: '',
+  AUDIO_PLAYBACK: '',
+  IFRAME_SCRIPTING: '',
+  DOM_SCRAPING: '',
+  BLOBS: '',
+  DOM_PARSER: '',
+  USER_MEDIA: '',
+  DISPLAY_MEDIA: '',
+  WEB_RTC: '',
+  CLIPBOARD: '',
+};
+
+/**
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/docs/extensions/reference/offscreen/#method-closeDocument
+ */
+chrome.offscreen.closeDocument = function(opt_callback) {};
+
+/**
+ * @param {!chrome.offscreen.CreateParameters} parameters The parameters
+ *     describing the offscreen document to create.
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ * @see https://developer.chrome.com/docs/extensions/reference/offscreen/#method-createDocument
+ */
+chrome.offscreen.createDocument = function(parameters, opt_callback) {};
+
+/**
+ * @const
  * @see https://developer.chrome.com/extensions/pageCapture.html
  */
 chrome.pageCapture = {};
@@ -6223,12 +6589,14 @@ chrome.sockets.tcp.setNoDelay = function(socketId, noDelay, callback) {};
  * @param {number} socketId
  * @param {string} peerAddress
  * @param {number} peerPort
- * @param {function(number)} callback
+ * @param {string|function(number)=} opt_dnsQueryTypeOrCallback
+ * @param {function(number)=} opt_callback
  * @see https://developer.chrome.com/apps/sockets_tcp#method-connect
  * @return {undefined}
  */
 chrome.sockets.tcp.connect = function(
-    socketId, peerAddress, peerPort, callback) {};
+    socketId, peerAddress, peerPort, opt_dnsQueryTypeOrCallback,
+    opt_callback) {};
 
 
 /**
@@ -6639,7 +7007,7 @@ chrome.sockets.udp.send = function(socketId, data, address, port, callback) {};
 
 /**
  * @param {number} socketId
- * @param {function()} callback
+ * @param {function()=} callback
  * @return {undefined}
  * @see https://developer.chrome.com/apps/sockets_udp#method-close
  */
@@ -6725,18 +7093,202 @@ chrome.sockets.udp.setBroadcast = function(socketId, enabled, callback) {};
 
 
 /**
- * @type {!ChromeObjectEvent}
+ * @constructor
+ * @see https://developer.chrome.com/docs/extensions/reference/sockets_udp/#type-ReceiveInfo
+ */
+chrome.sockets.udp.ReceiveEventData = function() {};
+
+
+/** @type {number} */
+chrome.sockets.udp.ReceiveEventData.prototype.socketId;
+
+
+/** @type {!ArrayBuffer} */
+chrome.sockets.udp.ReceiveEventData.prototype.data;
+
+
+/** @type {!string} */
+chrome.sockets.udp.ReceiveEventData.prototype.remoteAddress;
+
+
+/** @type {!number} */
+chrome.sockets.udp.ReceiveEventData.prototype.remotePort;
+
+
+/**
+ * Event whose listeners take a ReceiveEventData parameter.
+ * @interface
+ * @extends {ChromeBaseEvent<function(!chrome.sockets.udp.ReceiveEventData)>}
+ */
+chrome.sockets.udp.ReceiveEvent = function() {};
+
+
+/**
+ * @type {!chrome.sockets.udp.ReceiveEvent}
  * @see https://developer.chrome.com/apps/sockets_udp#event-onReceive
  */
 chrome.sockets.udp.onReceive;
 
 
 /**
- * @type {!ChromeObjectEvent}
+ * @constructor
+ * @see https://developer.chrome.com/docs/extensions/reference/sockets_udp/#type-ReceiveErrorInfo
+ */
+chrome.sockets.udp.ReceiveErrorEventData = function() {};
+
+
+/** @type {number} */
+chrome.sockets.udp.ReceiveErrorEventData.prototype.socketId;
+
+
+/** @type {number} */
+chrome.sockets.udp.ReceiveErrorEventData.prototype.resultCode;
+
+
+/**
+ * Event whose listeners take a ReceiveErrorEventData parameter.
+ * @interface
+ * @extends {ChromeBaseEvent<function(!chrome.sockets.udp.ReceiveErrorEventData)>}
+ */
+chrome.sockets.udp.ReceiveErrorEvent = function() {};
+
+
+/**
+ * @type {!chrome.sockets.udp.ReceiveErrorEvent}
  * @see https://developer.chrome.com/apps/sockets_udp#event-onReceiveError
  */
 chrome.sockets.udp.onReceiveError;
 
+/**
+ * @const
+ * @see https://developer.chrome.com/extensions/scripting.html
+ */
+chrome.scripting = {};
+
+/**
+ * @param {!chrome.scripting.ScriptInjection} injection
+ * @param {function(Array<!chrome.scripting.InjectionResult>): void=} callback
+ * @return {Promise<Array<!chrome.scripting.InjectionResult>>}
+ * @see https://developer.chrome.com/extensions/scripting#method-executeScript
+ */
+chrome.scripting.executeScript = function(injection, callback) {};
+
+/**
+ * @typedef {{
+ *   args: (!Array|undefined),
+ *   files: (!Array<string>|undefined),
+ *   injectImmediately: (boolean|undefined),
+ *   target: (!chrome.scripting.ScriptInjection),
+ *   world: (string|undefined),
+ *   func: (function()),
+ * }}
+ */
+chrome.scripting.ScriptInjection;
+
+
+/**
+ * @typedef {{
+ *   allFrames: (boolean|undefined),
+ *   documentIds: (!Array<string>|undefined),
+ *   frameIds: (!Array<number>|undefined),
+ *   tabId: (number|undefined),
+ * }}
+ */
+chrome.scripting.InjectionTarget;
+
+/**
+ * @typedef {{
+ *   result: (Object|undefined),
+ *   frameId: (number|undefined),
+ *   documentId: (string|undefined),
+ * }}
+ */
+chrome.scripting.InjectionResult;
+
+
+/**
+ * @param {function(!Array<!chrome.scripting.RegisteredContentScript>): void=}
+ *     callback
+ * @return {Promise<!Array<!chrome.scripting.RegisteredContentScript>>}
+ * @see https://developer.chrome.com/extensions/scripting#method-getRegisteredContentScripts
+ */
+chrome.scripting.getRegisteredContentScripts = function(callback) {};
+
+/**
+ * @param {!Array<!chrome.scripting.RegisteredContentScript>} scripts
+ * @param {function(): void=} callback
+ * @return {Promise<void>}
+ * @see https://developer.chrome.com/extensions/scripting#method-registerContentScripts
+ */
+chrome.scripting.registerContentScripts = function(scripts, callback) {};
+
+/**
+ * @param {!Array<!chrome.scripting.RegisteredContentScript>} scripts
+ * @param {function(): void=} callback
+ * @return {Promise<void>}
+ * @see https://developer.chrome.com/extensions/scripting#method-unregisterContentScripts
+ */
+chrome.scripting.updateContentScripts = function(scripts, callback) {};
+
+/**
+ * @param {!chrome.scripting.ContentScriptFilter} filter
+ * @param {function(): void=} callback
+ * @return {Promise<void>}
+ * @see https://developer.chrome.com/extensions/scripting#method-unregisterContentScripts
+ */
+chrome.scripting.unregisterContentScripts = function(filter, callback) {};
+
+/**
+ * @typedef {{
+ *   id: string,
+ *   js: (!Array<string>|undefined),
+ *   css: (!Array<string>|undefined),
+ *   matches: (!Array<string>|undefined),
+ *   excludeMatches: (!Array<string>|undefined),
+ *   runAt: (string|undefined),
+ *   world: (string|undefined),
+ *   allFrames: (boolean|undefined),
+ *   matchOriginAsFallback: (boolean|undefined),
+ *   persistAcrossSessions: (boolean|undefined),
+ * }}
+ * @see https://developer.chrome.com/extensions/scripting#type-RegisteredContentScript
+ */
+chrome.scripting.RegisteredContentScript;
+
+/**
+ * @typedef {{
+ *   ids: !Array<string>,
+ * }}
+ * @see https://developer.chrome.com/extensions/scripting#type-ContentScriptFilter
+ */
+chrome.scripting.ContentScriptFilter = function() {};
+
+/**
+ * @param {!chrome.scripting.CSSInjection} injection
+ * @param {function(): void=} callback
+ * @return {Promise<void>}
+ * @see https://developer.chrome.com/extensions/scripting#method-insertCSS
+ */
+chrome.scripting.insertCSS = function(injection, callback) {};
+
+/**
+ * @param {!chrome.scripting.CSSInjection} injection
+ * @param {function(): void=} callback
+ * @return {Promise<void>}
+ * @see https://developer.chrome.com/extensions/scripting#method-removeCSS
+ */
+chrome.scripting.removeCSS = function(injection, callback) {};
+
+/**
+ * @typedef {{
+ *   css: (string|undefined),
+ *   files: (!Array<string>|undefined),
+ *   origin: (string|undefined),
+ *   target: (!chrome.scripting.InjectionTarget|undefined),
+ * }}
+ * @see https://developer.chrome.com/extensions/scripting#type-CSSInjection
+ */
+chrome.scripting.CSSInjection;
 
 /**
  * @const
@@ -6756,6 +7308,8 @@ chrome.storage.local;
 /** @type {!StorageArea} */
 chrome.storage.managed;
 
+/** @type {!StorageArea} */
+chrome.storage.session;
 
 /** @type {!StorageChangeEvent} */
 chrome.storage.onChanged;
@@ -6840,6 +7394,15 @@ chrome.system.display.MirrorMode = {
  */
 chrome.system.display.Bounds;
 
+
+/**
+ * @enum {string}
+ * @see https://developer.chrome.com/docs/extensions/reference/api/system/display#type-ActiveState
+ */
+chrome.system.display.ActiveState = {
+  ACTIVE: '',
+  INACTIVE: '',
+};
 
 /**
  * @typedef {!{
@@ -7011,6 +7574,10 @@ chrome.system.display.DisplayUnitInfo.prototype.isInternal;
 
 /** @type {boolean} */
 chrome.system.display.DisplayUnitInfo.prototype.isEnabled;
+
+
+/** @type {?chrome.system.display.ActiveState} */
+chrome.system.display.DisplayUnitInfo.prototype.activeState;
 
 
 /** @type {number} */
@@ -10717,19 +11284,6 @@ chrome.serial.onReceiveError;
 /**
  * @const
  */
-chrome.musicManagerPrivate = {};
-
-
-/**
- * @param {function(string): void} callback
- * @return {undefined}
- */
-chrome.musicManagerPrivate.getDeviceId = function(callback) {};
-
-
-/**
- * @const
- */
 chrome.mediaGalleriesPrivate = {};
 
 
@@ -12031,6 +12585,13 @@ chrome.declarativeContent.PageStateMatcher = function(literalValue) {};
 
 /**
  * @constructor
+ * @see https://developer.chrome.com/extensions/declarativeContent#type-ShowAction
+ */
+chrome.declarativeContent.ShowAction = function() {};
+
+
+/**
+ * @constructor
  * @see https://developer.chrome.com/extensions/declarativeContent#type-ShowPageAction
  */
 chrome.declarativeContent.ShowPageAction = function() {};
@@ -12145,3 +12706,95 @@ chrome.instanceID.onTokenRefresh = {};
  * @see https://developer.chrome.com/extensions/instanceID#event-onTokenRefresh
  */
 chrome.instanceID.onTokenRefresh.addListener = function(callback) {};
+
+/**
+ * @see https://developer.chrome.com/docs/extensions/reference/dom/
+ * @const
+ */
+chrome.dom = {};
+
+/**
+ * @param {!HTMLElement} element
+ * @return {!ShadowRoot | null}
+ * @see https://developer.chrome.com/docs/extensions/reference/dom/#method-openOrClosedShadowRoot
+ */
+chrome.dom.openOrClosedShadowRoot = function(element) {};
+
+/**
+ * @see https://developer.chrome.com/docs/extensions/reference/api/userScripts
+ * @const
+ */
+chrome.userScripts = {};
+
+/**
+ * @typedef {{
+*   code: (string|undefined),
+*   file: (string|undefined)
+* }}
+*/
+chrome.userScripts.ScriptSource;
+
+/**
+ * @typedef {{
+ *   allFrames: (boolean|undefined),
+ *   excludeGlobs: (!Array<string>|undefined),
+ *   excludeMatches: (!Array<string>|undefined),
+ *   id: string,
+ *   includeGlobs: (!Array<string>|undefined),
+ *   js: (!Array<chrome.userScripts.ScriptSource>|undefined),
+ *   matches: (!Array<string>|undefined),
+ *   runAt: (string|undefined),
+ *   world: (string|undefined)
+ * }}
+ */
+chrome.userScripts.RegisteredUserScript;
+
+/**
+ * @typedef {{
+ *   ids: (!Array<string>|undefined)
+ * }}
+ */
+chrome.userScripts.UserScriptFilter;
+
+/**
+ * @typedef {{
+ *   csp: (string|undefined),
+ *   messaging: (boolean|undefined)
+ * }}
+ */
+chrome.userScripts.WorldProperties;
+
+/**
+ * @param {!chrome.userScripts.WorldProperties} properties
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ */
+chrome.userScripts.configureWorld = function(properties, opt_callback) {};
+
+/**
+ * @param {(!chrome.userScripts.UserScriptFilter|undefined)} filter
+ * @param {function(!Array<!chrome.userScripts.RegisteredUserScript>): void=} opt_callback
+ * @return {undefined}
+ */
+chrome.userScripts.getScripts = function(filter, opt_callback) {};
+
+/**
+ * @param {!Array<!chrome.userScripts.RegisteredUserScript>} scripts
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ */
+chrome.userScripts.register = function(scripts, opt_callback) {};
+
+/**
+ * @param {(!chrome.userScripts.UserScriptFilter|undefined)} filter
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ */
+chrome.userScripts.unregister = function(filter, opt_callback) {};
+
+/**
+ * @param {!Array<!chrome.userScripts.RegisteredUserScript>} scripts
+ * @param {function(): void=} opt_callback
+ * @return {undefined}
+ */
+chrome.userScripts.update = function(scripts, opt_callback) {};

@@ -26,18 +26,13 @@ import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import java.util.ArrayDeque;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Peephole optimization to remove useless code such as IF's with false guard conditions, comma
  * operator's left hand sides with no side effects, etc.
  */
 class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
-
-  // TODO(dcc): Some (all) of these can probably be better achieved
-  // using the control flow graph (like CheckUnreachableCode).
-  // There is an existing CFG pass (UnreachableCodeElimination) that
-  // could be changed to use code from CheckUnreachableCode to do this.
 
   @Override
   Node optimizeSubtree(Node subtree) {
@@ -58,7 +53,10 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       case IF:
         return tryFoldIf(subtree);
       case WHILE:
-        throw checkNormalization(false, "WHILE");
+        // This pass gets run both before and after denormalize. Hence, the AST could potentially
+        // contain WHILE (denormalized).
+        // TODO: Ideally, we should optimize this case instead of returning
+        return subtree;
       case FOR:
         {
           Node condition = NodeUtil.getConditionExpression(subtree);
@@ -88,8 +86,12 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
         return tryOptimizeNameDeclaration(subtree);
       case DEFAULT_VALUE:
         return tryRemoveDefaultValue(subtree);
+      case OPTCHAIN_GETPROP:
+      case OPTCHAIN_CALL:
+      case OPTCHAIN_GETELEM:
+        return tryRemoveOptionalChaining(subtree);
       default:
-          return subtree;
+        return subtree;
     }
   }
 
@@ -120,12 +122,24 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     return defaultValue;
   }
 
-  private Node tryFoldLabel(Node n) {
+  private @Nullable Node tryFoldLabel(Node n) {
     String labelName = n.getFirstChild().getString();
     Node stmt = n.getLastChild();
-    if (stmt.isEmpty() || (stmt.isBlock() && !stmt.hasChildren())) {
+    if (stmt.isEmpty()) {
       reportChangeToEnclosingScope(n);
       n.detach();
+      return null;
+    }
+
+    if (stmt.isBlock() && !stmt.hasChildren()) {
+      reportChangeToEnclosingScope(n);
+      if (n.getParent().isLabel()) {
+        // If the parent is itself a label, replace this label
+        // with its contained block to keep the AST in a valid state.
+        n.replaceWith(stmt.detach());
+      } else {
+        n.detach();
+      }
       return null;
     }
 
@@ -146,8 +160,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
    * otherwise return null. For purposes of this method, a node is considered "interesting" unless
    * it is an empty synthetic block.
    */
-  @Nullable
-  private static Node getOnlyInterestingChild(Node block) {
+  private static @Nullable Node getOnlyInterestingChild(Node block) {
     if (!block.isBlock()) {
       return null;
     }
@@ -170,12 +183,12 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
   }
 
   /**
-   * Remove try blocks without catch blocks and with empty or not
-   * existent finally blocks.
-   * Or, only leave the finally blocks if try body blocks are empty
+   * Remove try blocks without catch blocks and with empty or not existent finally blocks. Or, only
+   * leave the finally blocks if try body blocks are empty
+   *
    * @return the replacement node, if changed, or the original if not
    */
-  private Node tryFoldTry(Node n) {
+  private @Nullable Node tryFoldTry(Node n) {
     checkState(n.isTry(), n);
     Node body = n.getFirstChild();
     Node catchBlock = body.getNext();
@@ -183,23 +196,27 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
     // Removes TRYs that had its CATCH removed and/or empty FINALLY.
     if (!catchBlock.hasChildren() && (finallyBlock == null || !finallyBlock.hasChildren())) {
+      checkState(!n.getParent().isLabel());
       body.detach();
       n.replaceWith(body);
       reportChangeToEnclosingScope(body);
       return body;
     }
 
-    // Only leave FINALLYs if TRYs are empty
+    // Only leave FINALLYs if TRYs are not empty
     if (!body.hasChildren()) {
       NodeUtil.redeclareVarsInsideBranch(catchBlock);
       reportChangeToEnclosingScope(n);
       if (finallyBlock != null) {
         finallyBlock.detach();
+        checkState(!n.getParent().isLabel());
         n.replaceWith(finallyBlock);
+        return finallyBlock;
       } else {
+        checkState(!n.getParent().isLabel());
         n.detach();
+        return null;
       }
-      return finallyBlock;
     }
 
     return n;
@@ -214,9 +231,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     checkState(subtree.isAssign());
     Node left = subtree.getFirstChild();
     Node right = subtree.getLastChild();
-    if (left.isName()
-        && right.isName()
-        && left.getString().equals(right.getString())) {
+    if (left.isName() && right.isName() && left.getString().equals(right.getString())) {
       // Only names
       subtree.replaceWith(right.detach());
       reportChangeToEnclosingScope(right);
@@ -254,6 +269,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
   /**
    * Try folding EXPR_RESULT nodes by removing useless Ops and expressions.
+   *
    * @return the replacement node, if changed, or the original if not
    */
   private Node tryFoldExpr(Node subtree) {
@@ -281,8 +297,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
    *
    * @return The replacement expression, or {@code null} if there were no side-effects to preserve.
    */
-  @Nullable
-  private Node trySimplifyUnusedResult(Node expression) {
+  private @Nullable Node trySimplifyUnusedResult(Node expression) {
     ArrayDeque<Node> sideEffectRoots = new ArrayDeque<>();
     boolean atFixedPoint = trySimplifyUnusedResultInternal(expression, sideEffectRoots);
 
@@ -479,10 +494,8 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     }
   }
 
-  /**
-   * A predicate for matching anything except function nodes.
-   */
-  private static class MatchUnnamedBreak implements Predicate<Node>{
+  /** A predicate for matching anything except function nodes. */
+  private static class MatchUnnamedBreak implements Predicate<Node> {
     @Override
     public boolean apply(Node n) {
       return n.isBreak() && !n.hasChildren();
@@ -534,9 +547,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     }
   }
 
-  /**
-   * Remove useless switches and cases.
-   */
+  /** Remove useless switches and cases. */
   private Node tryOptimizeSwitch(Node n) {
     checkState(n.isSwitch(), n);
 
@@ -620,13 +631,13 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
   }
 
   /**
-   * @return the default case node or null if there is no default case or
-   *     if the default case is removed.
+   * @return the default case node or null if there is no default case or if the default case is
+   *     removed.
    */
-  private Node tryOptimizeDefaultCase(Node n) {
+  private @Nullable Node tryOptimizeDefaultCase(Node n) {
     checkState(n.isSwitch(), n);
 
-    Node lastNonRemovable = n.getFirstChild();  // The switch condition
+    Node lastNonRemovable = n.getFirstChild(); // The switch condition
 
     // The first child is the switch conditions skip it when looking for cases.
     for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
@@ -639,8 +650,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
         }
 
         // Don't use the switch condition as the previous case.
-        Node prevCase = (lastNonRemovable == n.getFirstChild())
-            ? null : lastNonRemovable;
+        Node prevCase = (lastNonRemovable == n.getFirstChild()) ? null : lastNonRemovable;
 
         // Remove the default case if we can
         if (isUselessCase(c, prevCase, c)) {
@@ -650,8 +660,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
         return c;
       } else {
         checkState(c.isCase());
-        if (c.getLastChild().hasChildren()
-            || mayHaveSideEffects(c.getFirstChild())) {
+        if (c.getLastChild().hasChildren() || mayHaveSideEffects(c.getFirstChild())) {
           lastNonRemovable = c;
         }
       }
@@ -661,6 +670,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
   /**
    * Remove the case from the switch redeclaring any variables declared in it.
+   *
    * @param caseNode The case to remove.
    */
   private void removeCase(Node switchNode, Node caseNode) {
@@ -683,8 +693,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     Node switchNode = caseNode.getParent();
     if (switchNode.getLastChild() != caseNode && previousCase != null) {
       Node previousBlock = previousCase.getLastChild();
-      if (!previousBlock.hasChildren()
-          || !isExit(previousBlock.getLastChild())) {
+      if (!previousBlock.hasChildren() || !isExit(previousBlock.getLastChild())) {
         return false;
       }
     }
@@ -715,8 +724,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
               return !blockChild.hasChildren()
                   && (defaultCase == null || defaultCase == executingCase);
             case VAR:
-              if (blockChild.hasOneChild()
-                  && blockChild.getFirstFirstChild() == null) {
+              if (blockChild.hasOneChild() && blockChild.getFirstFirstChild() == null) {
                 // Variable declarations without initializations are OK.
                 continue;
               }
@@ -733,7 +741,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
   }
 
   /**
-   * @return Whether the node is an obvious control flow exit.
+   * @return Whether the node is a control flow exit from the current block.
    */
   private static boolean isExit(Node n) {
     switch (n.getToken()) {
@@ -742,9 +750,109 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       case RETURN:
       case THROW:
         return true;
+      case SWITCH:
+        return isSwitchExit(n);
+      case TRY:
+        return isTryExit(n);
       default:
         return false;
     }
+  }
+
+  /**
+   * @return Whether the block is a control flow exit from the block containing current switch or
+   *     try..catch statement.
+   */
+  private static boolean isUnconditionalBlockExit(Node n) {
+    checkState(n.isBlock(), n);
+    checkState(!n.getParent().isLabel(), n);
+
+    // Last statement must lead out of the block.
+    Node lastStm = n.getLastChild();
+    if (lastStm == null) {
+      return false;
+    }
+    switch (lastStm.getToken()) {
+      case BREAK:
+        if (!lastStm.hasChildren()) {
+          return false;
+        }
+        // fall through
+      case RETURN:
+      case THROW:
+        // Last statement is OK - continue with checking others.
+        break;
+      default:
+        return false;
+    }
+
+    // Other statements can be anything except for unlabeled "break". But for simplicity, don't go
+    // into inner blocks and complex constructs - instead, allow only the simplest statements.
+    for (Node child = n.getFirstChild(); child != lastStm; child = child.getNext()) {
+      switch (child.getToken()) {
+        case BREAK:
+          if (!child.hasChildren()) {
+            return false;
+          }
+          // fall through
+        case RETURN:
+        case THROW:
+        case FUNCTION:
+        case VAR:
+        case LET:
+        case CONST:
+        case EXPR_RESULT:
+          // This statement is OK - continue with checking others.
+          break;
+        default:
+          return false;
+      }
+    }
+
+    return true;
+  }
+
+  /** Return true if the switch always "exits" (return, throw, etc). */
+  private static boolean isSwitchExit(Node n) {
+    checkState(n.isSwitch(), n);
+
+    boolean hasDefaultCase = false;
+
+    for (Node switchCase = n.getSecondChild();
+        switchCase != null;
+        switchCase = switchCase.getNext()) {
+      if (switchCase.isDefaultCase()) {
+        hasDefaultCase = true;
+      }
+      Node block = switchCase.getLastChild();
+      if ((block.hasChildren() || switchCase.getNext() == null)
+          && !isUnconditionalBlockExit(block)) {
+        return false;
+      }
+    }
+
+    return hasDefaultCase;
+  }
+
+  /** Return true if the try..catch always "exits" (return, throw, etc). */
+  private static boolean isTryExit(Node n) {
+    checkState(n.isTry(), n);
+
+    // finally - regardless of the behavior of the other blocks,
+    // an exit from the finally with guarantee that behavior.
+    if (n.hasXChildren(3)) {
+      if (isUnconditionalBlockExit(n.getLastChild())) {
+        return true;
+      }
+    }
+    // try
+    if (!isUnconditionalBlockExit(n.getFirstChild())) {
+      return false;
+    }
+    // catch
+    Node catches = n.getSecondChild();
+    return !catches.hasChildren()
+        || isUnconditionalBlockExit(catches.getOnlyChild().getLastChild());
   }
 
   private Node tryFoldComma(Node n) {
@@ -764,21 +872,21 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     return n;
   }
 
-  /**
-   * Try removing unneeded block nodes and their useless children
-   */
-  Node tryOptimizeBlock(Node n) {
+  /** Try removing unneeded block nodes and their useless children */
+  @Nullable Node tryOptimizeBlock(Node n) {
     // Remove any useless children
     for (Node c = n.getFirstChild(); c != null; ) {
-      Node next = c.getNext();  // save c.next, since 'c' may be removed
+      Node next = c.getNext(); // save c.next, since 'c' may be removed
       if (!isUnremovableNode(c) && !mayHaveSideEffects(c)) {
-        checkNormalization(!NodeUtil.isFunctionDeclaration(n), "function declaration");
         // TODO(johnlenz): determine what this is actually removing. Candidates
         //    include: EMPTY nodes, control structures without children
         //    (removing infinite loops), empty try blocks.  What else?
         c.detach();
         reportChangeToEnclosingScope(n);
         markFunctionsDeleted(c);
+      } else if (isExit(c)) {
+        removeFollowingNodes(c);
+        break;
       } else {
         tryOptimizeConditionalAfterAssign(c);
       }
@@ -789,14 +897,40 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       return n;
     }
 
-    // Try to remove the block.
+    // Try to merge the block with its parent, or remove it if it is an empty class static block.
     Node parent = n.getParent();
     if (NodeUtil.tryMergeBlock(n, isASTNormalized())) {
+      reportChangeToEnclosingScope(parent);
+      return null;
+    } else if (parent.isClassMembers() && !n.hasChildren()) {
+      n.detach();
       reportChangeToEnclosingScope(parent);
       return null;
     }
 
     return n;
+  }
+
+  private void removeFollowingNodes(Node n) {
+    Node parent = n.getParent();
+    if (parent.getLastChild() != n) {
+      boolean changed = false;
+      while (n.getNext() != null) {
+        Node dead = n.getNext();
+        if (NodeUtil.isFunctionDeclaration(dead)) {
+          // Don't remove function declarations as they are hoisted
+          n = dead;
+          continue;
+        }
+        changed = true;
+        NodeUtil.redeclareVarsInsideBranch(dead);
+        dead.detach();
+        markFunctionsDeleted(dead);
+      }
+      if (changed) {
+        reportChangeToEnclosingScope(parent);
+      }
+    }
   }
 
   /**
@@ -809,8 +943,8 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
   // TODO(johnlenz): Consider moving this to a separate peephole pass.
   /**
-   * Attempt to replace the condition of if or hook immediately that is a
-   * reference to a name that is assigned immediately before.
+   * Attempt to replace the condition of if or hook immediately that is a reference to a name that
+   * is assigned immediately before.
    */
   private void tryOptimizeConditionalAfterAssign(Node n) {
     Node next = n.getNext();
@@ -828,7 +962,9 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     // or
     //   a = 0;
     //   a && foo(a)
-    //
+    // or
+    //   a = 0;
+    //   a ?? foo(a)
     // TODO(johnlenz): This would be better handled by control-flow sensitive
     // constant propagation. As the other case that I want to handle is:
     //   i=0; for(;i<0;i++){}
@@ -836,33 +972,68 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     // This is here simply to remove the cruft left behind goog.userAgent and
     // similar cases.
 
-    if (isSimpleAssignment(n) && isConditionalStatement(next)) {
-      Node lhsAssign = getSimpleAssignmentName(n);
+    if (!isSimpleAssignment(n)) {
+      return;
+    }
+    Node conditionalRoot = getConditionalRoot(next);
+    if (conditionalRoot == null) {
+      return;
+    }
+    Node lhsAssign = getSimpleAssignmentName(n);
 
-      Node condition = getConditionalStatementCondition(next);
-      if (lhsAssign.isName() && condition.isName()
-          && lhsAssign.getString().equals(condition.getString())) {
-        Node rhsAssign = getSimpleAssignmentValue(n);
+    Node condition = getConditionalStatementCondition(next);
+    if (!lhsAssign.matchesName(condition)) {
+      return;
+    }
+    Node rhsAssign = getSimpleAssignmentValue(n);
+    switch (conditionalRoot.getToken()) {
+      case AND:
+      case OR:
+      case IF:
+      case HOOK:
+        // conditionals that coerce their condition to a boolean
         Tri value = NodeUtil.getBooleanValue(rhsAssign);
         if (value != Tri.UNKNOWN) {
-          Node replacementConditionNode =
-              NodeUtil.booleanNode(value.toBoolean(true));
+          Node replacementConditionNode = NodeUtil.booleanNode(value.toBoolean(true));
           condition.replaceWith(replacementConditionNode);
           reportChangeToEnclosingScope(replacementConditionNode);
         }
-      }
+        return;
+      case COALESCE:
+        // conditional that checks whether its operand is nullish
+        NodeUtil.ValueType valueType = NodeUtil.getKnownValueType(rhsAssign);
+        switch (valueType) {
+          case NULL:
+          case VOID:
+            condition.replaceWith(NodeUtil.newUndefinedNode(condition));
+            reportChangeToEnclosingScope(conditionalRoot);
+            break;
+          case NUMBER:
+          case BIGINT:
+          case STRING:
+          case BOOLEAN:
+          case OBJECT:
+            // semi-arbitrarily use '0' as a short non-nullish conditional
+            condition.replaceWith(IR.number(0).srcref(condition));
+            reportChangeToEnclosingScope(conditionalRoot);
+            break;
+          case UNDETERMINED:
+            break;
+        }
+        return;
+      default:
+        throw new AssertionError("Unhandled condition " + conditionalRoot);
     }
   }
 
   /**
-   * @return whether the node is a assignment to a simple name, or simple var
-   * declaration with initialization.
+   * @return whether the node is a assignment to a simple name, or simple var declaration with
+   *     initialization.
    */
   private static boolean isSimpleAssignment(Node n) {
     // For our purposes we define a simple assignment to be a assignment
     // to a NAME node, or a VAR declaration with one child and a initializer.
-    if (NodeUtil.isExprAssign(n)
-        && n.getFirstFirstChild().isName()) {
+    if (NodeUtil.isExprAssign(n) && n.getFirstFirstChild().isName()) {
       return true;
     } else if (NodeUtil.isNameDeclaration(n) && n.hasOneChild() && n.getFirstFirstChild() != null) {
       return true;
@@ -893,15 +1064,25 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
   }
 
   /**
-   * @return Whether the node is a conditional statement.
+   * @return the root node if a conditional statement or else null
    */
-  private boolean isConditionalStatement(Node n) {
+  private @Nullable Node getConditionalRoot(Node n) {
     // We defined a conditional statement to be a IF or EXPR_RESULT rooted with
     // a HOOK, AND, or OR node.
-    return n != null && (n.isIf() || isExprConditional(n));
+    if (n == null) {
+      return null;
+    }
+    if (n.isIf()) {
+      return n;
+    } else if (isExprConditional(n)) {
+      return n.getFirstChild();
+    }
+    return null;
   }
 
-  /** @return Whether the node is a rooted with a HOOK, AND, OR, or COALESCE node. */
+  /**
+   * @return Whether the node is a rooted with a HOOK, AND, OR, or COALESCE node.
+   */
   private static boolean isExprConditional(Node n) {
     if (n.isExprResult()) {
       switch (n.getFirstChild().getToken()) {
@@ -931,9 +1112,10 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
   /**
    * Try folding IF nodes by removing dead branches.
+   *
    * @return the replacement node, if changed, or the original if not
    */
-  private Node tryFoldIf(Node n) {
+  private @Nullable Node tryFoldIf(Node n) {
     checkState(n.isIf(), n);
     Node parent = n.getParent();
     checkNotNull(parent);
@@ -982,7 +1164,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     // Try transforms that apply to both IF and HOOK.
     Tri condValue = NodeUtil.getBooleanValue(cond);
     if (condValue == Tri.UNKNOWN) {
-      return n;  // We can't remove branches otherwise!
+      return n; // We can't remove branches otherwise!
     }
 
     if (mayHaveSideEffects(cond)) {
@@ -1038,6 +1220,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
   /**
    * Try folding HOOK (?:) if the condition results of the condition is known.
+   *
    * @return the replacement node, if changed, or the original if not
    */
   private Node tryFoldHook(Node n) {
@@ -1053,7 +1236,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       // If the result nodes are equivalent, then one of the nodes can be
       // removed and it doesn't matter which.
       if (!areNodesEqualForInlining(thenBody, elseBody)) {
-        return n;  // We can't remove branches otherwise!
+        return n; // We can't remove branches otherwise!
       }
     }
 
@@ -1086,10 +1269,8 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     return replacement;
   }
 
-  /**
-   * Removes FORs that always evaluate to false.
-   */
-  Node tryFoldFor(Node n) {
+  /** Removes FORs that always evaluate to false. */
+  @Nullable Node tryFoldFor(Node n) {
     checkArgument(n.isVanillaFor());
 
     Node init = n.getFirstChild();
@@ -1123,8 +1304,14 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
     Node parent = n.getParent();
     NodeUtil.redeclareVarsInsideBranch(n);
+
     if (!mayHaveSideEffects(cond)) {
-      NodeUtil.removeChild(parent, n);
+      // Remove the entire loop and any associated labels.
+      while (parent.isLabel()) {
+        n = parent;
+        parent = parent.getParent();
+      }
+      n.detach();
     } else {
       Node statement = IR.exprResult(cond.detach()).srcrefIfMissing(cond);
       if (parent.isLabel()) {
@@ -1136,13 +1323,13 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       n.replaceWith(statement);
     }
     reportChangeToEnclosingScope(parent);
+
     return null;
   }
 
   /**
-   * Removes DOs that always evaluate to false. This leaves the
-   * statements that were in the loop in a BLOCK node.
-   * The block will be removed in a later pass, if possible.
+   * Removes DOs that always evaluate to false. This leaves the statements that were in the loop in
+   * a BLOCK node. The block will be removed in a later pass, if possible.
    */
   Node tryFoldDoAway(Node n) {
     checkArgument(n.isDo());
@@ -1168,10 +1355,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     return block;
   }
 
-  /**
-   * Removes DOs that have empty bodies into FORs, which are
-   * much easier for the CFA to analyze.
-   */
+  /** Removes DOs that have empty bodies into FORs, which are much easier for the CFA to analyze. */
   Node tryFoldEmptyDo(Node n) {
     checkArgument(n.isDo());
 
@@ -1179,10 +1363,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     if (body.isBlock() && !body.hasChildren()) {
       Node cond = NodeUtil.getConditionExpression(n);
       Node forNode =
-          IR.forNode(IR.empty().srcref(n),
-                     cond.detach(),
-                     IR.empty().srcref(n),
-                     body.detach());
+          IR.forNode(IR.empty().srcref(n), cond.detach(), IR.empty().srcref(n), body.detach());
       n.replaceWith(forNode);
       reportChangeToEnclosingScope(forNode);
       return forNode;
@@ -1252,9 +1433,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     return defaultValue == null || !mayHaveSideEffects(defaultValue);
   }
 
-  /**
-   * Returns whether a node has any unhandled breaks or continue.
-   */
+  /** Returns whether a node has any unhandled breaks or continue. */
   static boolean hasUnnamedBreakOrContinue(Node n) {
     return NodeUtil.has(
             n,
@@ -1275,9 +1454,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
                     && !NodeUtil.isLoopStructure(node));
   }
 
-  /**
-   * Remove always true loop conditions.
-   */
+  /** Remove always true loop conditions. */
   private void tryFoldForCondition(Node forCondition) {
     if (getSideEffectFreeBooleanValue(forCondition) == Tri.TRUE) {
       reportChangeToEnclosingScope(forCondition);
@@ -1285,8 +1462,24 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     }
   }
 
-  private static IllegalStateException checkNormalization(boolean condition, String feature) {
-    checkState(condition, "Unexpected %s. AST should be normalized.", feature);
-    return null;
+  private Node tryRemoveOptionalChaining(Node optionalChain) {
+    Node callee = optionalChain.getFirstChild();
+    if (!NodeUtil.isNullOrUndefined(callee)) {
+      return optionalChain;
+    }
+    final Node result;
+    if (this.mayHaveSideEffects(callee)) {
+      // Simplify `(void sideEffectFunction())?.()` to `(void sideEffectFunction())`
+      // The optional chain call won't execute but sideEffectFunction() is still evaluated.
+      optionalChain.replaceWith(callee.detach());
+      result = callee;
+    } else {
+      // Remove `(void 0)?.()` and (null)?.() and simplify `(void 0)?.x and null?.x` to void 0
+      result = NodeUtil.newUndefinedNode(callee);
+      optionalChain.replaceWith(result);
+    }
+    this.markFunctionsDeleted(optionalChain);
+    this.reportChangeToEnclosingScope(result);
+    return result;
   }
 }

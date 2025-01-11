@@ -16,6 +16,7 @@
 package com.google.javascript.jscomp;
 
 import com.google.common.collect.ImmutableList;
+import com.google.javascript.jscomp.lint.CheckConstPrivateProperties;
 import com.google.javascript.jscomp.lint.CheckConstantCaseNames;
 import com.google.javascript.jscomp.lint.CheckDefaultExportOfGoogModule;
 import com.google.javascript.jscomp.lint.CheckDuplicateCase;
@@ -32,10 +33,9 @@ import com.google.javascript.jscomp.lint.CheckPrototypeProperties;
 import com.google.javascript.jscomp.lint.CheckProvidesSorted;
 import com.google.javascript.jscomp.lint.CheckRequiresSorted;
 import com.google.javascript.jscomp.lint.CheckUnusedLabels;
+import com.google.javascript.jscomp.lint.CheckUnusedPrivateProperties;
 import com.google.javascript.jscomp.lint.CheckUselessBlocks;
 import com.google.javascript.jscomp.lint.CheckVar;
-import com.google.javascript.jscomp.parsing.parser.FeatureSet;
-import java.util.List;
 
 /**
  * A PassConfig for the standalone linter, which runs on a single file at a time. This runs a
@@ -49,18 +49,24 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
   }
 
   @Override
-  protected List<PassFactory> getChecks() {
-    return ImmutableList.of(
-        gatherModuleMetadataPass,
-        earlyLintChecks,
-        variableReferenceCheck,
-        closureRewriteClass,
-        lateLintChecks);
+  protected PassListBuilder getChecks() {
+    PassListBuilder passes = new PassListBuilder(options);
+    passes.maybeAdd(gatherModuleMetadataPass);
+    passes.maybeAdd(earlyLintChecks);
+    passes.maybeAdd(variableReferenceCheck);
+    passes.maybeAdd(closureRewriteClass);
+    passes.maybeAdd(lateLintChecks);
+    return passes;
   }
 
   @Override
-  protected List<PassFactory> getOptimizations() {
-    return ImmutableList.of();
+  protected PassListBuilder getOptimizations() {
+    return new PassListBuilder(options);
+  }
+
+  @Override
+  protected PassListBuilder getFinalizations() {
+    return new PassListBuilder(options);
   }
 
   private final PassFactory gatherModuleMetadataPass =
@@ -72,7 +78,6 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
                       compiler,
                       compiler.getOptions().getProcessCommonJSModules(),
                       compiler.getOptions().getModuleResolutionMode()))
-          .setFeatureSet(FeatureSet.latest())
           .build();
 
   private final PassFactory earlyLintChecks =
@@ -83,6 +88,7 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
                   new CombinedCompilerPass(
                       compiler,
                       ImmutableList.of(
+                          new CheckConstPrivateProperties(compiler),
                           new CheckConstantCaseNames(compiler),
                           new CheckDefaultExportOfGoogModule(compiler),
                           new CheckDuplicateCase(compiler),
@@ -100,12 +106,12 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
                           new CheckProvidesSorted(CheckProvidesSorted.Mode.COLLECT_AND_REPORT),
                           new CheckRequiresSorted(CheckRequiresSorted.Mode.COLLECT_AND_REPORT),
                           new CheckSideEffects(
-                              compiler, /* report */ true, /* protectSideEffectFreeCode */ false),
+                              compiler, /* report= */ true, /* protectSideEffectFreeCode= */ false),
                           new CheckTypeImportCodeReferences(compiler),
                           new CheckUnusedLabels(compiler),
+                          new CheckUnusedPrivateProperties(compiler),
                           new CheckUselessBlocks(compiler),
                           new CheckVar(compiler))))
-          .setFeatureSet(FeatureSet.latest())
           .build();
 
   private final PassFactory variableReferenceCheck =
@@ -113,14 +119,12 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
           .setName("variableReferenceCheck")
           .setRunInFixedPointLoop(true)
           .setInternalFactory(VariableReferenceCheck::new)
-          .setFeatureSet(FeatureSet.latest())
           .build();
 
   private final PassFactory closureRewriteClass =
       PassFactory.builder()
           .setName(PassNames.CLOSURE_REWRITE_CLASS)
           .setInternalFactory(ClosureRewriteClass::new)
-          .setFeatureSet(FeatureSet.latest())
           .build();
 
   private final PassFactory lateLintChecks =
@@ -132,6 +136,5 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
                       compiler,
                       ImmutableList.of(
                           new CheckInterfaces(compiler), new CheckPrototypeProperties(compiler))))
-          .setFeatureSet(FeatureSet.latest())
           .build();
 }

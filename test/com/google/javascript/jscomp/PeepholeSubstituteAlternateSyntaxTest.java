@@ -16,9 +16,6 @@
 
 package com.google.javascript.jscomp;
 
-import static com.google.common.truth.Truth.assertThat;
-
-import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -35,11 +32,11 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
   // Needed for testFoldLiteralObjectConstructors(),
   // testFoldLiteralArrayConstructors() and testFoldRegExp...()
   private static final String FOLD_CONSTANTS_TEST_EXTERNS =
-      "var window = {};\n" +
-      "var Object = function f(){};\n" +
-      "var RegExp = function f(a){};\n" +
-      "var Array = function f(a){};\n" +
-      "window.foo = null;\n";
+      "var window = {};\n"
+          + "var Object = function f(){};\n"
+          + "var RegExp = function f(a){};\n"
+          + "var Array = function f(a){};\n"
+          + "window.foo = null;\n";
 
   private boolean late;
   private boolean retraverseOnChange;
@@ -72,83 +69,16 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
 
     // Cannot fold all the way to a literal because there are too few arguments.
     test("x = new RegExp", "x = RegExp()");
-    // Empty regexp should not fold to // since that is a line comment
-    test("x = new RegExp(\"\")", "x = RegExp(\"\")");
-    test("x = new RegExp(\"\", \"i\")", "x = RegExp(\"\",\"i\")");
-
-    // Regexp starting with * should not fold to /* since that is the start of a comment
-    test("x = new RegExp('*')", "x = RegExp('*')");
-    test("x = new RegExp('*', 'i')", "x = RegExp('*', 'i')");
-
-    // Bogus flags should not fold
-    testSame("x = RegExp(\"foobar\", \"bogus\")",
-         PeepholeSubstituteAlternateSyntax.INVALID_REGULAR_EXPRESSION_FLAGS);
-    // Don't fold if the argument is not a string. See issue 1260.
-    testSame("x = new RegExp(y)");
-    // Can Fold
-    test("x = new RegExp(\"foobar\")", "x = /foobar/");
-    test("x = RegExp(\"foobar\")", "x = /foobar/");
-    test("x = new RegExp(\"foobar\", \"i\")", "x = /foobar/i");
-    // Make sure that escaping works
-    test("x = new RegExp(\"\\\\.\", \"i\")", "x = /\\./i");
-    test("x = new RegExp(\"/\", \"\")", "x = /\\//");
-    test("x = new RegExp(\"[/]\", \"\")", "x = /[/]/");
-    test("x = new RegExp(\"///\", \"\")", "x = /\\/\\/\\//");
-    test("x = new RegExp(\"\\\\\\/\", \"\")", "x = /\\//");
-    test("x = new RegExp(\"\\n\")", "x = /\\n/");
-    test("x = new RegExp('\\\\\\r')", "x = /\\r/");
-
-    // Shouldn't fold RegExp unnormalized because
-    // we can't be sure that RegExp hasn't been redefined
-    disableNormalize();
-
-    testSame("x = new RegExp(\"foobar\")");
-  }
-
-  @Test
-  public void testVersionSpecificRegExpQuirks() {
-    enableNormalize();
-
-    // Don't fold if the flags contain 'g'
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT3);
-    test("x = new RegExp(\"foobar\", \"g\")", "x = RegExp(\"foobar\",\"g\")");
-    test("x = new RegExp(\"foobar\", \"ig\")", "x = RegExp(\"foobar\",\"ig\")");
-    // ... unless in ECMAScript 5 mode per section 7.8.5 of ECMAScript 5.
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT5);
-    test("x = new RegExp(\"foobar\", \"ig\")", "x = /foobar/ig");
-    // Don't fold things that crash older versions of Safari and that don't work
-    // as regex literals on other old versions of Safari
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT3);
-    test("x = new RegExp(\"\\u2028\")", "x = RegExp(\"\\u2028\")");
-    test("x = new RegExp(\"\\\\\\\\u2028\")", "x = /\\\\u2028/");
-    // Sunset Safari exclusions for ECMAScript 5 and later.
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT5);
-    test("x = new RegExp(\"\\u2028\\u2029\")", "x = /\\u2028\\u2029/");
-    test("x = new RegExp(\"\\\\u2028\")", "x = /\\u2028/");
-    test("x = new RegExp(\"\\\\\\\\u2028\")", "x = /\\\\u2028/");
-  }
-
-  @Test
-  public void testFoldRegExpConstructorStringCompare() {
-    enableNormalize();
-    test("x = new RegExp(\"\\n\", \"i\")", "x = /\\n/i");
-  }
-
-  @Test
-  public void testContainsUnicodeEscape() {
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("")).isFalse();
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("foo")).isFalse();
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("\u2028")).isTrue();
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("\\u2028")).isTrue();
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("foo\\u2028")).isTrue();
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("foo\\\\u2028")).isFalse();
-    assertThat(PeepholeSubstituteAlternateSyntax.containsUnicodeEscape("foo\\\\u2028bar\\u2028"))
-        .isTrue();
+    // Could fold all the way to /foobar/, but the complexity of that optimization wasn't worth the
+    // code size improvements, mainly because there are a lot special cases to check.
+    test("x = new RegExp(\"foobar\")", "x = RegExp(\"foobar\")");
   }
 
   @Test
   public void testFoldLiteralObjectConstructors() {
     enableNormalize();
+    // TODO(bradfordcsmith): Stop normalizing the expected output or document why it is necessary.
+    enableNormalizeExpectedOutput();
 
     // Can fold when normalized
     test("x = new Object", "x = ({})");
@@ -170,6 +100,8 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
   @Test
   public void testFoldLiteralObjectConstructors_onWindow() {
     enableNormalize();
+    // TODO(bradfordcsmith): Stop normalizing the expected output or document why it is necessary.
+    enableNormalizeExpectedOutput();
 
     // Can fold when normalized
     test("x = new window.Object", "x = ({})");
@@ -260,6 +192,8 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
   @Test
   public void testRemoveWindowRefs() {
     enableNormalize();
+    // TODO(bradfordcsmith): Stop normalizing the expected output or document why it is necessary.
+    enableNormalizeExpectedOutput();
     test("x = window.Object", "x = Object");
     test("x = window.Object.keys", "x = Object.keys");
     test("if (window.Object) {}", "if (Object) {}");
@@ -385,6 +319,8 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
     testSame("var x = undefined");
     testSame("function f(f) {var undefined=2;var x = undefined;}");
     enableNormalize();
+    // TODO(bradfordcsmith): Stop normalizing the expected output or document why it is necessary.
+    enableNormalizeExpectedOutput();
     test("var x = undefined", "var x=void 0");
     testSame("var undefined = 1;" + "function f() {var undefined=2;var x = undefined;}");
     testSame("function f(undefined) {}");
@@ -407,10 +343,13 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
 
     // Don't try to split COMMA under LABELs.
     testSame("a:a(),b()");
-
+    test("1, 2, 3, 4", "1; 2; 3; 4");
+    test("x = 1, 2, 3", "x = 1; 2; 3");
+    testSame("x = (1, 2, 3)");
+    test("1, (2, 3), 4", "1; 2; 3; 4");
     test("(x=2), foo()", "x=2; foo()");
     test("foo(), boo();", "foo(); boo()");
-    test("(a(), b()), (c(), d());", "a(), b(); c(), d()");
+    test("(a(), b()), (c(), d());", "a(); b(); c(); d()");
     test("a(); b(); (c(), d());", "a(); b(); c(); d();");
     test("foo(), true", "foo();true");
     testSame("foo();true");
@@ -440,8 +379,8 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
   @Test
   public void testComma3() {
     late = false;
-    test("1, a(), b()", "1, a(); b()");
-    test("1, a?.(), b?.()", "1, a?.(); b?.()");
+    test("1, a(), b()", "1; a(); b()");
+    test("1, a?.(), b?.()", "1; a?.(); b?.()");
 
     late = true;
     testSame("1, a(), b()");
@@ -462,8 +401,8 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
   @Test
   public void testComma5() {
     late = false;
-    test("a(), b(), 1", "a(), b(); 1");
-    test("a?.(), b?.(), 1", "a?.(), b?.(); 1");
+    test("a(), b(), 1", "a(); b(); 1");
+    test("a?.(), b?.(), 1", "a?.(); b?.(); 1");
 
     late = true;
     testSame("a(), b(), 1");
@@ -474,20 +413,13 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
   public void testStringArraySplitting() {
     testSame("var x=['1','2','3','4']");
     testSame("var x=['1','2','3','4','5']");
-    test("var x=['1','2','3','4','5','6']",
-         "var x='123456'.split('')");
-    test("var x=['1','2','3','4','5','00']",
-         "var x='1 2 3 4 5 00'.split(' ')");
-    test("var x=['1','2','3','4','5','6','7']",
-        "var x='1234567'.split('')");
-    test("var x=['1','2','3','4','5','6','00']",
-         "var x='1 2 3 4 5 6 00'.split(' ')");
-    test("var x=[' ,',',',',',',',',',',']",
-         "var x=' ,;,;,;,;,;,'.split(';')");
-    test("var x=[',,',' ',',',',',',',',']",
-         "var x=',,; ;,;,;,;,'.split(';')");
-    test("var x=['a,',' ',',',',',',',',']",
-         "var x='a,; ;,;,;,;,'.split(';')");
+    test("var x=['1','2','3','4','5','6']", "var x='123456'.split('')");
+    test("var x=['1','2','3','4','5','00']", "var x='1 2 3 4 5 00'.split(' ')");
+    test("var x=['1','2','3','4','5','6','7']", "var x='1234567'.split('')");
+    test("var x=['1','2','3','4','5','6','00']", "var x='1 2 3 4 5 6 00'.split(' ')");
+    test("var x=[' ,',',',',',',',',',',']", "var x=' ,;,;,;,;,;,'.split(';')");
+    test("var x=[',,',' ',',',',',',',',']", "var x=',,; ;,;,;,;,'.split(';')");
+    test("var x=['a,',' ',',',',',',',',']", "var x='a,; ;,;,;,;,'.split(';')");
 
     // all possible delimiters used, leave it alone
     testSame("var x=[',', ' ', ';', '{', '}']");
@@ -638,16 +570,21 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
 
   @Test
   public void testRotateAssociativeOperators() {
-    test("a || (b || c); a * (b * c); a | (b | c)",
-        "(a || b) || c; (a * b) * c; (a | b) | c");
+    // Multiplication is not associative because it can include floating point numbers e.g.
+    // 1e-300 * 1e300 * 1e9 does not equal 1e-300 * (1e300 * 1e9).
+    test("a || (b || c); a * (b * c); a | (b | c)", "a || b || c; b * c * a; a | b | c");
     testSame("a % (b % c); a / (b / c); a - (b - c);");
-    test("a * (b % c);", "b % c * a");
-    test("a * b * (c / d)", "c / d * b * a");
+    testSame("(a / b) & (c % d)");
+    testSame("(c = 5) & (c % d)");
+    testSame("(a + b) * c * (d % e)");
     test("(a + b) * (c % d)", "c % d * (a + b)");
-    testSame("(a / b) * (c % d)");
-    testSame("(c = 5) * (c % d)");
-    test("(a + b) * c * (d % e)", "d % e * c * (a + b)");
-    test("!a * c * (d % e)", "d % e * c * !a");
+  }
+
+  @Test
+  public void testRotateCommutativeeOperators() {
+    test("a * (b % c);", "b % c * a");
+    testSame("a * b * (c / d)");
+    testSame("!a * c * (d % e)");
   }
 
   @Test
@@ -657,7 +594,7 @@ public final class PeepholeSubstituteAlternateSyntaxTest extends CompilerTestCas
 
   @Test
   public void testNoRotateInfiniteLoop() {
-    test("1/x * (y/1 * (1/z))", "1/x * (y/1) * (1/z)");
-    testSame("1/x * (y/1) * (1/z)");
+    test("1/x || (y/1 ||(1/z))", "1/x || (y/1) || (1/z)");
+    testSame("1/x || (y/1) || (1/z)");
   }
 }

@@ -18,18 +18,16 @@ package com.google.javascript.jscomp.bundle;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.testing.EqualsTester;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 /** Tests for {@link Source} and its nested classes. */
-@GwtIncompatible
 @RunWith(JUnit4.class)
 public final class SourceTest {
 
@@ -45,8 +43,8 @@ public final class SourceTest {
             Source.builder().setCode("foo").build())
         .addEqualityGroup(Source.builder().setCode("bar").build())
         .addEqualityGroup(
-            foo.toBuilder().setPath(Paths.get("/x")).build(),
-            foo.toBuilder().setPath(Paths.get("/x")).build())
+            foo.toBuilder().setPath(Path.of("/x")).build(),
+            foo.toBuilder().setPath(Path.of("/x")).build())
         .addEqualityGroup(
             foo.toBuilder().setOriginalCode("bar").build(),
             foo.toBuilder().setOriginalCode("bar").build())

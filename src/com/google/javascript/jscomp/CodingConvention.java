@@ -35,7 +35,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * CodingConvention defines a set of hooks to customize the behavior of the
@@ -240,11 +240,6 @@ public interface CodingConvention extends Serializable {
       NominalTypeBuilder classType, FunctionType getterType);
 
   /**
-   * @return Whether the function is inlinable by convention.
-   */
-  public boolean isInlinableFunction(Node n);
-
-  /**
    * @return the delegate relationship created by the call or null.
    */
   public DelegateRelationship getDelegateRelationship(Node callNode);
@@ -367,9 +362,10 @@ public interface CodingConvention extends Serializable {
   public boolean isPrototypeAlias(Node getProp);
 
   /**
-   * Whether this CALL function is returning the string name for a property, but allows renaming.
+   * Whether this GETPROP or NAME node is the function is returning the string name for a property,
+   * but allows renaming.
    */
-  public boolean isPropertyRenameFunction(String name);
+  public boolean isPropertyRenameFunction(Node nameNode);
 
   /**
    * Checks if the given method performs a object literal cast, and if it does,
@@ -472,11 +468,9 @@ public interface CodingConvention extends Serializable {
   @AutoValue
   abstract class AssertionFunctionSpec {
     // TODO(b/126254920): remove this field and always use ClosurePrimitive
-    @Nullable
-    abstract String getFunctionName();
+    abstract @Nullable String getFunctionName();
 
-    @Nullable
-    abstract ClosurePrimitive getClosurePrimitive();
+    abstract @Nullable ClosurePrimitive getClosurePrimitive();
 
     abstract AssertionKind getAssertionKind();
 

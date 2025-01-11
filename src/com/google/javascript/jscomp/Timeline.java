@@ -18,9 +18,10 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An ordered set that moves values to the front when added (even if already contained) and which
@@ -31,9 +32,9 @@ import java.util.Map;
 final class Timeline<T> {
 
   private static class Event<T> {
-    Event<?> nextEvent;
-    Event<?> previousEvent;
-    T value;
+    @Nullable Event<?> nextEvent;
+    @Nullable Event<?> previousEvent;
+    final T value;
 
     Event(T value) {
       checkNotNull(value);
@@ -63,8 +64,8 @@ final class Timeline<T> {
     }
   }
 
-  private final Map<Time, Event<Time>> eventsByTime = new HashMap<>();
-  private final Map<T, Event<T>> eventsByValue = new HashMap<>();
+  private final Map<Time, Event<Time>> eventsByTime = new LinkedHashMap<>();
+  private final Map<T, Event<T>> eventsByValue = new LinkedHashMap<>();
   // In practice headEvent is Event<Time> or Event<T>
   private Event<?> headEvent = new Event<>(new Time("-beginning-"));
 
@@ -97,7 +98,7 @@ final class Timeline<T> {
   }
 
   @SuppressWarnings("unchecked")
-  List<T> getSince(String timeName) {
+  @Nullable List<T> getSince(String timeName) {
     List<T> values = new ArrayList<>();
 
     Event<?> firstEvent = eventsByTime.get(new Time(timeName));

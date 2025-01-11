@@ -327,6 +327,12 @@ function DocumentFragment() {}
 function Document() {}
 
 /**
+ * @type {!HTMLCollection}
+ * @see https://dom.spec.whatwg.org/#parentnode
+ */
+Document.prototype.children;
+
+/**
  * @type {DocumentType}
  * @see http://www.w3.org/TR/1998/REC-DOM-Level-1-19981001/level-one-core.html#attribute-doctype
  */
@@ -702,7 +708,7 @@ Element.prototype.removeAttributeNode = function(oldAttr) {};
 
 /**
  * @param {string} name
- * @param {string|number|boolean|!TrustedHTML|!TrustedScriptURL}
+ * @param {string|number|boolean|!TrustedHTML|!TrustedScriptURL|!TrustedScript}
  *     value Values are converted to strings with ToString, so we accept number
  *     and boolean since both convert easily to strings.
  * @return {undefined}

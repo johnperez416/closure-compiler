@@ -19,9 +19,10 @@ import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.javascript.jscomp.NodeUtil.Visitor;
 import com.google.javascript.rhino.Node;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -37,6 +38,7 @@ public class ChangeVerifier {
     this.compiler = compiler;
   }
 
+  @CanIgnoreReturnValue
   ChangeVerifier snapshot(Node root) {
     // remove any existing snapshot data.
     clonesByCurrent.clear();
@@ -72,6 +74,14 @@ public class ChangeVerifier {
       child = child.getNext();
       snapshotChild = snapshotChild.getNext();
     }
+
+    Node shadowChild = n.getClosureUnawareShadow();
+    Node snapshotShadowChild = snapshot.getClosureUnawareShadow();
+    if (shadowChild != null && snapshotShadowChild != null) {
+      associateClones(shadowChild, snapshotShadowChild);
+    } else if (shadowChild != null || snapshotShadowChild != null) {
+      throw new IllegalStateException("invalid Shadow node state");
+    }
   }
 
   /** Checks that the scope roots marked as changed have indeed changed */
@@ -79,7 +89,7 @@ public class ChangeVerifier {
     final String passNameMsg = passName.isEmpty() ? "" : passName + ": ";
 
     // Gather all the scope nodes that existed when the snapshot was taken.
-    final Set<Node> snapshotScopeNodes = new HashSet<>();
+    final Set<Node> snapshotScopeNodes = new LinkedHashSet<>();
     NodeUtil.visitPreOrder(
         clonesByCurrent.get(root),
         new Visitor() {
@@ -87,6 +97,10 @@ public class ChangeVerifier {
           public void visit(Node oldNode) {
             if (NodeUtil.isChangeScopeRoot(oldNode)) {
               snapshotScopeNodes.add(oldNode);
+            }
+            Node shadow = oldNode.getClosureUnawareShadow();
+            if (shadow != null) {
+              NodeUtil.visitPreOrder(shadow.getFirstFirstChild(), this);
             }
           }
         });
@@ -108,6 +122,15 @@ public class ChangeVerifier {
               } else {
                 verifyNodeChange(passNameMsg, n, clone);
               }
+            }
+            Node shadow = n.getClosureUnawareShadow();
+            if (shadow != null) {
+              checkState(shadow.isRoot(), shadow);
+              checkState(shadow.getChildCount() == 1, shadow);
+              Node script = shadow.getFirstChild();
+              checkState(script.isScript(), script);
+              checkState(script.getChildCount() == 1, script);
+              NodeUtil.visitPreOrder(script.getFirstChild(), this);
             }
           }
         });

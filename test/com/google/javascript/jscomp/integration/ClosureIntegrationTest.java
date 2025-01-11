@@ -22,7 +22,6 @@ import static com.google.javascript.jscomp.DiagnosticGroups.CHECK_TYPES;
 import static com.google.javascript.jscomp.base.JSCompStrings.lines;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CheckLevel;
 import com.google.javascript.jscomp.ClosureCodingConvention;
@@ -39,10 +38,12 @@ import com.google.javascript.jscomp.GenerateExports;
 import com.google.javascript.jscomp.GoogleCodingConvention;
 import com.google.javascript.jscomp.JSChunk;
 import com.google.javascript.jscomp.ModuleIdentifier;
+import com.google.javascript.jscomp.PropertyRenamingPolicy;
 import com.google.javascript.jscomp.SourceFile;
 import com.google.javascript.jscomp.VariableRenamingPolicy;
 import com.google.javascript.jscomp.WarningLevel;
 import com.google.javascript.jscomp.testing.JSChunkGraphBuilder;
+import com.google.javascript.jscomp.testing.JSCompCorrespondences;
 import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.StaticSourceFile.SourceKind;
@@ -64,6 +65,113 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
       "/** @define {boolean} */ var COMPILED = true;";
 
   private static final String CLOSURE_COLLAPSED = lines("var COMPILED = true;");
+
+  @Test
+  public void testReferencingMangledModuleNames_rewriteModulesBeforeTypechecking() {
+    CompilerOptions options = createCompilerOptions();
+    options.setClosurePass(true);
+    options.setCheckTypes(true);
+    compile(
+        options,
+        new String[] {
+          lines(
+              "goog.module('foo.bar');",
+              "class Inner {}",
+              "class Outer extends Inner {}",
+              "exports.Outer = Outer;"),
+          lines(
+              "/** @type {!module$exports$foo$bar} */ let err1;",
+              "/** @type {!module$contents$foo$bar_Inner} */ let err2;")
+        });
+    assertThat(lastCompiler.getWarnings())
+        .comparingElementsUsing(JSCompCorrespondences.DESCRIPTION_EQUALITY)
+        .containsExactly(
+            "Bad type annotation. Unknown type UnrecognizedType_module$exports$foo$bar",
+            "Bad type annotation. Unknown type UnrecognizedType_module$contents$foo$bar_Inner");
+  }
+
+  @Test
+  public void testReferencingMangledModuleNames_rewriteModulesAfterTypechecking() {
+    CompilerOptions options = createCompilerOptions();
+    options.setClosurePass(true);
+    options.setCheckTypes(true);
+    options.setBadRewriteModulesBeforeTypecheckingThatWeWantToGetRidOf(false);
+    compile(
+        options,
+        new String[] {
+          lines(
+              "goog.module('foo.bar');",
+              "class Inner {}",
+              "class Outer extends Inner {}",
+              "exports.Outer = Outer;"),
+          lines(
+              "/** @type {!module$exports$foo$bar} */ let err1;",
+              "/** @type {!module$contents$foo$bar_Inner} */ let err2;")
+        });
+    assertThat(lastCompiler.getWarnings())
+        .comparingElementsUsing(JSCompCorrespondences.DESCRIPTION_EQUALITY)
+        .containsExactly(
+            "Bad type annotation. Unknown type UnrecognizedType_module$exports$foo$bar",
+            "Bad type annotation. Unknown type UnrecognizedType_module$contents$foo$bar_Inner");
+  }
+
+  @Test
+  public void testFunctionDeclarationInGoogScope_usingGoogModuleGetType() {
+    CompilerOptions options = createCompilerOptions();
+    options.setClosurePass(true);
+    options.setCheckTypes(true);
+
+    compile(
+        options,
+        new String[] {
+          lines("goog.module('foo.bar.Types');", "exports.Klazz = class {};"),
+          lines(
+              "goog.requireType('foo.bar.Types');",
+              "goog.scope(function() {",
+              "const fooBarTypes = goog.module.get('foo.bar.Types');",
+              "/** @param {!fooBarTypes.Klazz} k */",
+              "function f(k) {}",
+              "f(null);", // expect a type error here
+              "});")
+        });
+
+    assertThat(lastCompiler.getWarnings())
+        .comparingElementsUsing(JSCompCorrespondences.DESCRIPTION_EQUALITY)
+        .containsExactly(
+            lines(
+                "actual parameter 1 of $jscomp$scope$98477071$0$f does not match formal parameter",
+                "found   : null",
+                "required: foo.bar.Types.Klazz"));
+    assertThat(lastCompiler.getErrors()).isEmpty();
+  }
+
+  @Test
+  public void testEsModuleInterop_esModuleUsingGoogRequireType() {
+    CompilerOptions options = createCompilerOptions();
+    options.setClosurePass(true);
+    options.setCheckTypes(true);
+
+    compile(
+        options,
+        new String[] {
+          lines("goog.module('foo.bar.Types');", "exports.Klazz = class {};"),
+          lines(
+              "const {Klazz} = goog.requireType('foo.bar.Types');",
+              "/** @param {!Klazz} k */",
+              "export function f(k) {}",
+              "f(null);" // expect a type error here
+              )
+        });
+
+    assertThat(lastCompiler.getWarnings())
+        .comparingElementsUsing(JSCompCorrespondences.DESCRIPTION_EQUALITY)
+        .containsExactly(
+            lines(
+                "actual parameter 1 of f does not match formal parameter",
+                "found   : null",
+                "required: foo.bar.Types.Klazz"));
+    assertThat(lastCompiler.getErrors()).isEmpty();
+  }
 
   @Test
   public void testProcessDefinesInModule() {
@@ -172,43 +280,6 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
         lines(CLOSURE_COLLAPSED, "var FOO$BAR = 3;"));
   }
 
-  /**
-   * Tests that calls to goog.string.Const.from() with non-constant arguments are detected with and
-   * without collapsed properties.
-   */
-  @Test
-  public void testBug22684459_invalidConstFromParamCompatibleWithPropertyCollapsing() {
-    String source =
-        lines(
-            "goog.string = {};",
-            "goog.string.Const = {};",
-            "goog.string.Const.from = function(x) {};",
-            "var x = window.document.location;",
-            "goog.string.Const.from(x);");
-
-    // Without collapsed properties.
-    CompilerOptions options = createCompilerOptions();
-    test(options, source, DiagnosticGroups.INVALID_CONST_PARAM);
-
-    // With collapsed properties.
-    options.setCollapsePropertiesLevel(PropertyCollapseLevel.ALL);
-    test(options, source, DiagnosticGroups.INVALID_CONST_PARAM);
-  }
-
-  @Test
-  public void testBug31301233_invalidConstFromParamFiresForUnusedLocal() {
-    String source =
-        lines(
-            "function Foo() {",
-            "  var x = window.document.location;",
-            "  goog.string.Const.from(x);",
-            "};");
-
-    CompilerOptions options = createCompilerOptions();
-    options.setSmartNameRemoval(true);
-    test(options, source, DiagnosticGroups.INVALID_CONST_PARAM);
-  }
-
   @Test
   public void testBug2410122() {
     CompilerOptions options = createCompilerOptions();
@@ -280,30 +351,6 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
           "/** @define {foo.bar} */ foo.bar = {};"),
     };
     test(options, input, output, warnings);
-  }
-
-  /**
-   * Tests that calls to goog.string.Const.from() with non-constant arguments are detected with and
-   * without collapsed properties, even when goog.string.Const.from has been aliased.
-   */
-  @Test
-  public void testBug22684459_aliased() {
-    String source =
-        ""
-            + "goog.string = {};"
-            + "goog.string.Const = {};"
-            + "goog.string.Const.from = function(x) {};"
-            + "var mkConst = goog.string.Const.from;"
-            + "var x = window.document.location;"
-            + "mkConst(x);";
-
-    // Without collapsed properties.
-    CompilerOptions options = createCompilerOptions();
-    test(options, source, DiagnosticGroups.INVALID_CONST_PARAM);
-
-    // With collapsed properties.
-    options.setCollapsePropertiesLevel(PropertyCollapseLevel.ALL);
-    test(options, source, DiagnosticGroups.INVALID_CONST_PARAM);
   }
 
   @Test
@@ -494,7 +541,6 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
         "var x;var y");
   }
 
-  @GwtIncompatible // b/63595345
   @Test
   public void testClosurePassOff() {
     CompilerOptions options = createCompilerOptions();
@@ -503,7 +549,6 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
     testSame(options, "goog.getCssName = function(x) {};" + "goog.getCssName('foo');");
   }
 
-  @GwtIncompatible // b/63595345
   @Test
   public void testClosurePassOn() {
     CompilerOptions options = createCompilerOptions();
@@ -658,7 +703,6 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
     options.setDefineToBooleanLiteral("ns.FLAG_XYZ", false);
     test(options, code, CLOSURE_COLLAPSED + "var ns$FLAG = false;");
   }
-
 
   @Test
   public void testI18nMessageValidation_throughModuleExport() {
@@ -930,7 +974,7 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
           // input 0
           "goog.module('a.b');",
           // input 1
-          "goog.module.get('a.b');"
+          "var unsupportedAssignmentToGlobal = goog.module.get('a.b');"
         },
         DiagnosticGroups.CLOSURE_DEP_METHOD_USAGE_CHECKS);
 
@@ -941,21 +985,17 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
           // input 0
           "goog.module('a.b');",
           // input 1
-          "goog.provide('c'); goog.module.get('a.b');"
+          "goog.provide('c'); var unsupportedAssignmentToGlobal = goog.module.get('a.b');"
         },
         DiagnosticGroups.CLOSURE_DEP_METHOD_USAGE_CHECKS);
   }
 
-  @GwtIncompatible // b/63595345
   @Test
   public void testProvideRequireSameFile() {
     CompilerOptions options = createCompilerOptions();
     options.setDependencyOptions(DependencyOptions.sortOnly());
     options.setClosurePass(true);
-    test(
-        options,
-        "goog.provide('x'); goog.require('x');",
-        "var x = {};");
+    test(options, "goog.provide('x'); goog.require('x');", "var x = {};");
   }
 
   @Test
@@ -965,8 +1005,7 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
     test(
         options,
         new String[] {
-          "goog.require('x');",
-          "goog.provide('x');",
+          "goog.require('x');", "goog.provide('x');",
         },
         new String[] {
           "goog.provide('x');",
@@ -986,24 +1025,117 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
     WarningLevel warnings = WarningLevel.DEFAULT;
     warnings.setOptionsForWarningLevel(options);
 
-    String code = "" +
-        "var CLOSURE_DEFINES = {\n" +
-        "  'FOO': 1,\n" +
-        "  'BAR': true\n" +
-        "};\n" +
-        "\n" +
-        "/** @define {number} */ var FOO = 0;\n" +
-        "/** @define {boolean} */ var BAR = false;\n" +
-        "";
+    String code =
+        lines(
+            "var CLOSURE_DEFINES = {", //
+            "  'FOO': 1,",
+            "  'BAR': true",
+            "};",
+            "",
+            "/** @define {number} */ var FOO = 0;",
+            "/** @define {boolean} */ var BAR = false;",
+            "");
 
-    String result = "" +
-        "var CLOSURE_DEFINES = {\n" +
-        "  FOO: 1,\n" +
-        "  BAR: !0\n" +
-        "}," +
-        "FOO = 1," +
-        "BAR = !0" +
-        "";
+    String result =
+        lines(
+            "var CLOSURE_DEFINES = {", //
+            "  FOO: 1,",
+            "  BAR: !0",
+            "},",
+            "FOO = 1,",
+            "BAR = !0",
+            "");
+
+    test(options, code, result);
+  }
+
+  @Test
+  public void testGoogWeakUsage() {
+    CompilerOptions options = createCompilerOptions();
+    CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(options);
+
+    externs =
+        ImmutableList.of(
+            new TestExternsBuilder()
+                .addClosureExterns()
+                .addExtra("function use(x) {}")
+                .buildExternsFile("externs.js"));
+
+    String code =
+        lines(
+            "var noStrongRefs = 123;",
+            "function getValue() { return 456; }",
+            "var hasStrongRefs = getValue();",
+            "use(hasStrongRefs);",
+            "use(goog.weakUsage(hasStrongRefs));",
+            "use(goog.weakUsage(noStrongRefs));"); //
+
+    // RemoveUnusedCode rewrites `goog.weakUsage(noStrongRefs)` to `void 0`.
+    // PeepholeReplaceKnownMethods rewrites `goog.weakUsage(a)` to `a`.
+    //
+    // InlineVariables has a special check that prevents the value of `a` from getting inlined into
+    // `use(a)`, because that would interfere with RemoveUnusedCode's analysis of the weak usage.
+    // But the getValue() function can still be inlined into `a`.
+    String result = lines("var a = 456;", "use(a);", "use(a);", "use(void 0);");
+
+    test(options, code, result);
+  }
+
+  @Test
+  public void testGoogWeakUsageQualifiedName() {
+    CompilerOptions options = createCompilerOptions();
+    CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(options);
+
+    externs =
+        ImmutableList.of(
+            new TestExternsBuilder()
+                .addClosureExterns()
+                .addExtra("function use(x) {}")
+                .buildExternsFile("externs.js"));
+
+    String code =
+        lines(
+            "var noStrongRefs = {prop: 123};",
+            "function getValue() { return 456; }",
+            "var hasStrongRefs = {prop: getValue()};",
+            "use(hasStrongRefs.prop);",
+            "use(goog.weakUsage(hasStrongRefs.prop));",
+            "use(goog.weakUsage(noStrongRefs.prop));"); //
+
+    // RemoveUnusedCode rewrites `goog.weakUsage(noStrongRefs)` to `void 0`.
+    // PeepholeReplaceKnownMethods rewrites `goog.weakUsage(a)` to `a`.
+    //
+    // InlineVariables has a special check that prevents the value of `a` from getting inlined into
+    // `use(a)`, because that would interfere with RemoveUnusedCode's analysis of the weak usage.
+    // But the getValue() function can still be inlined into `a`.
+    String result = lines("var a = 456;", "use(a);", "use(a);", "use(void 0);");
+
+    test(options, code, result);
+  }
+
+  @Test
+  public void testGoogWeakUsageNocollapse() {
+    CompilerOptions options = createCompilerOptions();
+    CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(options);
+
+    externs =
+        ImmutableList.of(
+            new TestExternsBuilder()
+                .addClosureExterns()
+                .addExtra("function use(x) {}")
+                .buildExternsFile("externs.js"));
+
+    String code =
+        lines(
+            "var noStrongRefs = { /** @nocollapse */ prop: 123};",
+            "function getValue() { return 456; }",
+            "var hasStrongRefs = { /** @nocollapse */ prop: getValue()};",
+            "use(hasStrongRefs.prop);",
+            "use(goog.weakUsage(hasStrongRefs.prop));",
+            "use(goog.weakUsage(noStrongRefs.prop));"); //
+
+    // @nocollapse prevents goog.weakUsage from having an effect.
+    String result = lines("var a = {a:456};", "use(a.a);", "use(a.a);", "use(123);");
 
     test(options, code, result);
   }
@@ -1103,7 +1235,6 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
   }
 
   /** Creates a CompilerOptions object with google coding conventions. */
-  @Override
   public CompilerOptions createCompilerOptions() {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageOut(LanguageMode.ECMASCRIPT3);
@@ -1119,7 +1250,7 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
     // A bug in Es6RewriteClasses meant we were putting the wrong `originalName` on some nodes.
     CompilerOptions options = createCompilerOptions();
     // force SourceInformationAnnotator to run
-    options.setExternExports(true);
+    options.setExternExportsPath("exports.js");
     options.setLanguageOut(LanguageMode.ECMASCRIPT5);
     options.setClosurePass(true);
 
@@ -1289,6 +1420,52 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
   }
 
   @Test
+  public void testGoogReflectObjectPropertyCall_returnsRenamedProperty() {
+    CompilerOptions options = createCompilerOptions();
+    options.setClosurePass(true);
+    options.setPropertyRenaming(PropertyRenamingPolicy.ALL_UNQUOTED);
+    options.setGeneratePseudoNames(true);
+
+    test(
+        options,
+        new String[] {
+          lines(
+              "goog.provide('goog.reflect');",
+              "goog.reflect.objectProperty = function(prop, obj) { return prop; };"),
+          "alert(goog.reflect.objectProperty('prop', {prop: 0}));"
+        },
+        new String[] {lines("goog.$reflect$ = {};"), "alert('$prop$');"});
+  }
+
+  @Test
+  public void
+      testGoogReflectObjectPropertyCall_inModule_withoutPropertyCollapsing_returnsRenamedProperty() {
+    CompilerOptions options = createCompilerOptions();
+    options.setClosurePass(true);
+    options.setPropertyRenaming(PropertyRenamingPolicy.ALL_UNQUOTED);
+    options.setGeneratePseudoNames(true);
+    options.setCollapsePropertiesLevel(PropertyCollapseLevel.NONE);
+    // forces the SourceInformationAnnotator to run
+    // TODO(b/193048186): remove this once SourceInformationAnnotator always runs
+    options.setReplaceStringsFunctionDescriptions(ImmutableList.of("\"Error(?)\""));
+
+    test(
+        options,
+        new String[] {
+          lines(
+              "goog.provide('goog.reflect');",
+              "goog.reflect.objectProperty = function(prop, obj) { return prop; };"),
+          lines(
+              "goog.module('m');",
+              "const reflect = goog.require('goog.reflect');",
+              "alert(reflect.objectProperty('prop', {prop: 0}));")
+        },
+        new String[] {
+          "goog.$reflect$ = {};", lines("var module$exports$m = {};", "alert('$prop$');")
+        });
+  }
+
+  @Test
   public void testGoogForwardDeclareInExterns_doesNotBlockVariableRenaming() {
     CompilerOptions options = createCompilerOptions();
     options.setClosurePass(true);
@@ -1416,5 +1593,152 @@ public final class ClosureIntegrationTest extends IntegrationTestCase {
         options,
         "/** @export */ function Foo() { alert('hi'); }",
         DiagnosticGroup.forType(GenerateExports.MISSING_GOOG_FOR_EXPORT));
+  }
+
+  @Test
+  public void testTypecheckClass_assignedInNestedAssignInGoogModule() {
+    CompilerOptions options = createCompilerOptions();
+    options.setCheckTypes(true);
+    options.setClosurePass(true);
+    options.setChecksOnly(true);
+
+    compile(
+        options,
+        lines(
+            "goog.module('main');",
+            "",
+            "var TestEl_1;",
+            "let TestEl = TestEl_1 = class TestEl {",
+            "  constructor() {",
+            "      this.someVal = false;",
+            "  }",
+            "}",
+            // pattern that may be generated from TypeScript decorators
+            "TestEl = TestEl_1 = (0, decorate)(TestEl);",
+            "exports.TestEl = TestEl;",
+            "/** @type {!TestEl} */ const t = new TestEl();"));
+
+    checkUnexpectedErrorsOrWarnings(lastCompiler, 0);
+  }
+
+  @Test
+  public void testTypecheckClassMultipleExtends_doesNotDisambiguate() {
+    // Regression test for b/325489639
+    CompilerOptions options = createCompilerOptions();
+    CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(options);
+    CompilationLevel.ADVANCED_OPTIMIZATIONS.setTypeBasedOptimizationOptions(options);
+    options.setGeneratePseudoNames(true);
+    inputFileNameSuffix = ".closure.js";
+    externs =
+        ImmutableList.of(
+            new TestExternsBuilder()
+                .addAlert()
+                .addClosureExterns()
+                .addExtra("var window;")
+                .buildExternsFile("externs.js"));
+    options.setLanguageOut(LanguageMode.NO_TRANSPILE);
+
+    test(
+        options,
+        lines(
+            "/** @fileoverview @suppress {checkTypes} */",
+            "",
+            // Define two parent classes, Foo and Bar, and a child class FooBar that all share
+            // method 1.
+            // FooBar is not really allowed to extend both Foo and Bar, but the @suppress checkTypes
+            // and the .closure.js suffix make it not an error. We expect property disambiguation to
+            // back off on Foo and Bar.
+            "class Foo { method1() { alert('foo'); } }",
+            "class Bar { method1() { alert('bar'); } }",
+            "/**",
+            " * @extends {Foo}",
+            " * @extends {Bar}",
+            " */",
+            "class FooBar { method1() {alert('foobar'); } }",
+            // Define extra normal classes Quz and Baz with a method2, just to ensure that
+            // property disambiguation actually runs in this test case, and it's not a fluke that
+            // method1 is not disambiguated.
+            "class Qux { method2() { alert('qux'); } }",
+            "class Baz { method2() { alert('baz'); } }",
+            "/** @noinline */",
+            "function callMethods(/** !Foo */ foo, /** !Bar */ bar, /** !FooBar */ fooBar, /** !Qux"
+                + " */ qux, /** !Baz */ baz) {",
+            // not disambiguated
+            "  foo.method1();",
+            "  bar.method1();",
+            "  fooBar.method1();",
+            // disambiguated
+            "  qux.method2();",
+            "  baz.method2();",
+            "}",
+            "window['prevent_dce'] = [Foo, Bar, FooBar, Qux, Baz, callMethods];"),
+        lines(
+            "class $Foo$$ { $method1$() { alert('foo'); } }",
+            "class $Bar$$ { $method1$() { alert('bar'); } }",
+            "class $FooBar$$ { $method1$() {alert('foobar'); } }",
+            "class $Qux$$ { }",
+            "class $Baz$$ { }",
+            "",
+            "/** @noinline */",
+            "function $callMethods$$(/** !Foo */ $foo$$, /** !Bar */ $bar$$, /** !FooBar */"
+                + " $fooBar$$) {",
+            // not disambiguated
+            "  $foo$$.$method1$();",
+            "  $bar$$.$method1$();",
+            "  $fooBar$$.$method1$();",
+            // disambiguated + inlined by InlineFunctions
+            "  alert('qux');",
+            "  alert('baz');",
+            "}",
+            "window.prevent_dce = [$Foo$$, $Bar$$, $FooBar$$, $Qux$$, $Baz$$, $callMethods$$];"));
+  }
+
+  @Test
+  public void testFileoverviewVisibility_overridenOnLegacyGoogModuleExport() {
+    CompilerOptions options = createCompilerOptions();
+    options.setCheckTypes(true);
+    options.setClosurePass(true);
+    options.setChecksOnly(true);
+    options.setWarningLevel(DiagnosticGroups.ACCESS_CONTROLS, CheckLevel.ERROR);
+
+    externs =
+        ImmutableList.<SourceFile>builder()
+            .addAll(externs)
+            .add(new TestExternsBuilder().addConsole().buildExternsFile("console.js"))
+            .build();
+
+    compile(
+        options,
+        ImmutableList.copyOf(
+            JSChunkGraphBuilder.forChain()
+                .setFilenameFormat("dir%s/f.js")
+                .addChunk(
+                    lines(
+                        "/**",
+                        " * @fileoverview",
+                        " * @package",
+                        " */",
+                        "goog.module('fileoverview.package.visibility.PublicFoo');",
+                        "goog.module.declareLegacyNamespace();",
+                        "",
+                        "class PublicFoo {",
+                        "  static protectedMethod() {}",
+                        "}",
+                        // Override the @protected @fileoverview visibility
+                        "/** @public */",
+                        "exports = PublicFoo;"))
+                .addChunk(
+                    lines(
+                        "goog.module('client');",
+                        "const PublicFoo ="
+                            + " goog.require('fileoverview.package.visibility.PublicFoo');",
+                        "console.log(PublicFoo); // this should be okay",
+                        "console.log(PublicFoo.protectedMethod()); // violates package visibility"))
+                .build()));
+
+    assertThat(lastCompiler.getWarnings()).isEmpty();
+    assertThat(lastCompiler.getErrors()).hasSize(1);
+    assertThat(lastCompiler.getErrors().get(0).getDescription())
+        .contains("Access to package-private property protectedMethod");
   }
 }

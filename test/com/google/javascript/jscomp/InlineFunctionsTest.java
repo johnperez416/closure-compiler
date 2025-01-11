@@ -48,6 +48,8 @@ public class InlineFunctionsTest extends CompilerTestCase {
     super.setUp();
     maybeEnableInferConsts();
     enableNormalize();
+    // TODO(bradfordcsmith): Stop normalizing the expected output or document why it is necessary.
+    enableNormalizeExpectedOutput();
     enableComputeSideEffects();
     inliningReach = Reach.ALL;
     assumeStrictThis = false;
@@ -80,6 +82,37 @@ public class InlineFunctionsTest extends CompilerTestCase {
     testSame("/** @noinline */ function foo(){} foo();foo();foo();");
     testSame("/** @noinline */ var foo = function(){}; foo();foo();foo();");
     testSame("/** @noinline */ var foo = function(){}; foo?.();foo?.();foo?.();");
+  }
+
+  @Test
+  public void testRequireInlining() {
+    test(
+        "/** @requireInlining */ function foo() {console.log('hi');console.log('bye');} "
+            + "foo();foo();foo();",
+        "{console.log('hi');console.log('bye');}".repeat(3));
+  }
+
+  @Test
+  public void testEncourageInliningCascades() {
+    disableCompareAsTree();
+    test(
+        "const a = class {constructor() {} setA(value) {this.a = value;} setB(value) {this.b ="
+            + " value;}}; /** @requireInlining */ function fromRecord(rec) { return new"
+            + " a().setA(rec.a).setB(rec.b); }; console.log(fromRecord({a: 1, b: fromRecord({a: 2,"
+            + " b: fromRecord({a: 4, b: 5}) }) }) );",
+        "const"
+            + " a=class{constructor(){}setA(value){this.a=value}setB(value$jscomp$1){this.b=value$jscomp$1}};var"
+            + " JSCompiler_temp_const$jscomp$1=console;var"
+            + " JSCompiler_temp_const$jscomp$0=JSCompiler_temp_const$jscomp$1.log;var"
+            + " JSCompiler_inline_result$jscomp$2;{var"
+            + " rec$jscomp$inline_5={a:4,b:5};JSCompiler_inline_result$jscomp$2=(new"
+            + " a).setA(rec$jscomp$inline_5.a).setB(rec$jscomp$inline_5.b)}var"
+            + " JSCompiler_inline_result$jscomp$3;\n"
+            + "{var rec$jscomp$inline_7={a:2,b:JSCompiler_inline_result$jscomp$2};JSCompiler_inline_result$jscomp$3=(new"
+            + " a).setA(rec$jscomp$inline_7.a).setB(rec$jscomp$inline_7.b)}var"
+            + " JSCompiler_inline_result$jscomp$4;{var"
+            + " rec$jscomp$inline_9={a:1,b:JSCompiler_inline_result$jscomp$3};JSCompiler_inline_result$jscomp$4=(new"
+            + " a).setA(rec$jscomp$inline_9.a).setB(rec$jscomp$inline_9.b)}JSCompiler_temp_const$jscomp$0.call(JSCompiler_temp_const$jscomp$1,JSCompiler_inline_result$jscomp$4)");
   }
 
   @Test
@@ -120,6 +153,13 @@ public class InlineFunctionsTest extends CompilerTestCase {
   public void testInlineEmptyFunction1_optChain() {
     // Empty function, no params.
     test("function foo(){} foo?.();", "void 0;");
+  }
+
+  @Test
+  public void testInline_optChain_1() {
+    // Empty function, no params.
+    test("(function(){}).call?.(this)", "void 0;");
+    test("(function(){})?.call(this)", "void 0;");
   }
 
   @Test
@@ -829,7 +869,7 @@ public class InlineFunctionsTest extends CompilerTestCase {
             "1;",
             "{var JSCompiler_inline_anon_param_0=x();1}",
             "1;",
-            "{var JSCompiler_inline_anon_param_4=x();1}"));
+            "{var JSCompiler_inline_anon_param_3 = 1; var JSCompiler_inline_anon_param_4=x();1}"));
   }
 
   @Test
@@ -857,10 +897,13 @@ public class InlineFunctionsTest extends CompilerTestCase {
         lines(
             "function foo(a,b){return a+b+a+b+4+5+6+7+8+9+1+2+3+10}", "foo(1,2);", "foo(2,3,x());"),
         lines(
-            "1+2+1+2+4+5+6+7+8+9+1+2+3+10;",
+            "1+2+1+2+4+5+6+7+8+9+1+2+3+10;", // inlining of the foo(1,2); call
             "{",
-            "  var JSCompiler_inline_anon_param_2 = x();",
-            "  2+3+2+3+4+5+6+7+8+9+1+2+3+10;",
+            "var a$jscomp$inline_0 = 2;", // temp for arg 2
+            "var b$jscomp$inline_1 = 3;", // temp for arg 3
+            "  var JSCompiler_inline_anon_param_2 = x();", // temp for arg x()
+            "  a$jscomp$inline_0 + b$jscomp$inline_1 + a$jscomp$inline_0 + b$jscomp$inline_1 + 4 +"
+                + " 5 + 6 + 7 + 8 + 9 + 1 + 2 + 3 + 10;",
             "}"));
   }
 
@@ -877,6 +920,36 @@ public class InlineFunctionsTest extends CompilerTestCase {
     test(
         lines("function foo(a) {", "  [a] = [1];", "}", "foo(2);"),
         lines("{", "  var a$jscomp$inline_0 = 2;", "  [a$jscomp$inline_0] = [1];", "}"));
+  }
+
+  @Test
+  public void testDestructuringAssignInFunction_withArrayPattern_doesNotCrash() {
+    test(
+        lines(
+            "var Di = I(() => {",
+            "  function zv() {",
+            "    JSCOMPILER_PRESERVE(e), [f] = CN();",
+            "  }",
+            "  function CN() {",
+            "    return [1];",
+            "  }",
+            "});"),
+        "var Di = I(() => {});");
+  }
+
+  @Test
+  public void testDestructuringAssignInFunction_withObjectPattern_doesNotCrash() {
+    test(
+        lines(
+            "var Di = I(() => {",
+            "  function zv() {",
+            "    JSCOMPILER_PRESERVE(e), ({f: g} = CN());",
+            "  }",
+            "  function CN() {",
+            "    return {f: 1};",
+            "  }",
+            "});"),
+        "var Di = I(() => {});");
   }
 
   @Test
@@ -911,14 +984,16 @@ public class InlineFunctionsTest extends CompilerTestCase {
     // Assignment in if, multiple params
     test(
         "function f(x,y){return x?(y=2):0}f(2,undefined)",
-        "{var y$jscomp$inline_1=undefined;2?(" + "y$jscomp$inline_1=2):0}");
+        "{var x$jscomp$inline_0 = 2; var y$jscomp$inline_1=undefined;"
+            + "x$jscomp$inline_0 ? y$jscomp$inline_1 = 2 : 0;}");
   }
 
   @Test
   public void testNoInlineIfParametersModified6() {
     test(
         "function f(x,y){return x?(y=2):0}f(2)",
-        "{var y$jscomp$inline_1=void 0;2?(" + "y$jscomp$inline_1=2):0}");
+        "{var x$jscomp$inline_0 = 2; var y$jscomp$inline_1=void 0;"
+            + "x$jscomp$inline_0 ? y$jscomp$inline_1 = 2 : 0;}");
   }
 
   @Test
@@ -2399,7 +2474,8 @@ public class InlineFunctionsTest extends CompilerTestCase {
         "{var a$jscomp$inline_0=void 0; a$jscomp$inline_0=1; void 0;}");
     test(
         "function f(a){a=1;this} f.call(x, x);",
-        "{var a$jscomp$inline_0=x; a$jscomp$inline_0=1; x;}");
+        "{var JSCompiler_inline_this_1 = x; var a$jscomp$inline_0=x; a$jscomp$inline_0=1;"
+            + " JSCompiler_inline_this_1;}");
   }
 
   // http://en.wikipedia.org/wiki/Fixed_point_combinator#Y_combinator
@@ -3009,8 +3085,10 @@ public class InlineFunctionsTest extends CompilerTestCase {
             "{",
             "  var JSCompiler_inline_result$jscomp$inline_0;",
             "  {",
-            "     var args$jscomp$inline_1 = [8];",
-            "     JSCompiler_inline_result$jscomp$inline_0 = 1 + args$jscomp$inline_1[0];",
+            "    var x$jscomp$inline_1 = 1;",
+            "    var args$jscomp$inline_2 = [8];",
+            "    JSCompiler_inline_result$jscomp$inline_0 = x$jscomp$inline_1 +"
+                + " args$jscomp$inline_2[0];",
             "  }",
             "  JSCompiler_inline_result$jscomp$inline_0",
             "}"));
@@ -3610,5 +3688,349 @@ public class InlineFunctionsTest extends CompilerTestCase {
             "    };",
             "  }",
             "}"));
+  }
+
+  @Test
+  public void testClassField() {
+    test(
+        lines(
+            "class C {", //
+            "  constructor() {",
+            "   /** @type {someType} */",
+            "    this.field = function f(){ function g() {} g() };",
+            "  }",
+            "}",
+            "C.staticField = function f(){ function g() {} g() };"),
+        lines(
+            "class C {",
+            "  constructor() {",
+            "    this.field = function f(){ void 0 };",
+            "  }",
+            "}",
+            "C.staticField = function f$jscomp$1() { void 0};"));
+    test(
+        lines(
+            "class C {", //
+            "  field = function f(){ function g() {} g() };",
+            "  static staticField = function f(){ function g() {} g() };",
+            "}"),
+        lines(
+            "class C {", //
+            "  field = function f(){ void 0 };",
+            "  static staticField = function f$jscomp$1() { void 0};",
+            "}"));
+
+    test(
+        lines(
+            "class C {", //
+            "  constructor() {",
+            "   /** @return {number} */",
+            "    this.field = function() {return 1 };",
+            "  }",
+            "}",
+            "C.staticField = function() {return 1 };",
+            "console.log(new C().field());",
+            "console.log(C.staticField());"),
+        lines(
+            "class C {", //
+            "  constructor() {",
+            "    this.field = function() {return 1 };",
+            "  }",
+            "}",
+            "C.staticField = function() {return 1 };",
+            "console.log(new C().field());",
+            "console.log(C.staticField());"));
+
+    testSame(
+        lines(
+            "class C {", //
+            "  field = function() {return 1 };",
+            "  static staticField = function() {return 1 };",
+            "}",
+            "console.log(new C().field());",
+            "console.log(C.staticField());"));
+
+    testSame(
+        lines(
+            "function f({x}) {", //
+            "  return x;",
+            "}",
+            "class Foo { x = 0; }",
+            "f(new Foo());"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentAndReassignedInFollowingArgument() {
+    // See https://github.com/google/closure-compiler/issues/4115.
+    test(
+        lines(
+            "function f(value, begin, end) {",
+            " return value.slice(begin, end);",
+            "}",
+            "window.g = function(a, b, c) {",
+            "  return f(a, b + 1, b = c);",
+            "};"),
+        lines(
+            "window.g = function(a, b, c) {",
+            " var JSCompiler_inline_result$jscomp$0;",
+            "{",
+            "  var value$jscomp$inline_1 = a;",
+            "  var begin$jscomp$inline_2 = b + 1;",
+            "  var end$jscomp$inline_3 = b = c;",
+            "  JSCompiler_inline_result$jscomp$0 =",
+            "   value$jscomp$inline_1.slice(begin$jscomp$inline_2, end$jscomp$inline_3);",
+            "}",
+            "return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentAndModifiedInFollowingFunctionArgumentCall() {
+    test(
+        lines(
+            "let text = 'abc'",
+            "let index = 1",
+            "",
+            "// This function is necessary. Inlining the slice call will make temps for both args",
+            "function slice(begin, end) {",
+            "  return text.slice(begin, end);",
+            "}",
+            "",
+            "function getEndIndex() {",
+            "  if (index)",
+            "    // This line is the only relevant line in this function - the index is being"
+                + " modified.",
+            "    // Everything else is artifical complexity to prevent the function from being"
+                + " inlined",
+            "    return ++index;",
+            "",
+            "  return getEndIndex();",
+            "}",
+            "",
+            "window.bug = slice(index - 1, getEndIndex());"),
+        lines(
+            "let text = 'abc';",
+            "let index = 1;",
+            "function getEndIndex() {",
+            "  if (index) {",
+            "    return ++index;",
+            "  }",
+            "  return getEndIndex();",
+            "}",
+            "var JSCompiler_temp_const$jscomp$0 = window;",
+            "var JSCompiler_inline_result$jscomp$1;",
+            "{",
+            "  var begin$jscomp$inline_2 = index - 1;",
+            "  var end$jscomp$inline_3 = getEndIndex();",
+            "  JSCompiler_inline_result$jscomp$1 = text.slice(begin$jscomp$inline_2,"
+                + " end$jscomp$inline_3);",
+            "}",
+            "JSCompiler_temp_const$jscomp$0.bug = JSCompiler_inline_result$jscomp$1;"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentAndReassignedInFollowingArgument2() {
+    // See https://github.com/google/closure-compiler/issues/4115.
+    test(
+        lines(
+            "function f(value, begin, end) {",
+            " return value.slice(begin, end);",
+            "}",
+            "window.g = function(a, b, c) {",
+            "  return f(a, b.x + 1, b.x = c);",
+            "};"),
+        lines(
+            "window.g = function(a, b, c) {", //
+            "    var JSCompiler_inline_result$jscomp$0;", //
+            "{",
+            "  var value$jscomp$inline_1 = a;",
+            "  var begin$jscomp$inline_2 = b.x + 1;",
+            "  var end$jscomp$inline_3 = b.x = c;",
+            "  JSCompiler_inline_result$jscomp$0 ="
+                + " value$jscomp$inline_1.slice(begin$jscomp$inline_2, end$jscomp$inline_3);",
+            "}",
+            "return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testDifferentPropertiesAsArguments() {
+    // See https://github.com/google/closure-compiler/issues/4115.
+    test(
+        lines(
+            "function f(value, begin, end) {",
+            " return value.slice(begin, end);",
+            "}",
+            "window.g = function(a, b, c) {",
+            "  return f(a, b.x + 1, b.y = c);",
+            "};"),
+        lines(
+            "window.g = function(a, b, c) {", //
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            "    var value$jscomp$inline_1 = a;",
+            "    var begin$jscomp$inline_2 = b.x + 1;",
+            "    var end$jscomp$inline_3 = b.y = c;",
+            "    JSCompiler_inline_result$jscomp$0 ="
+                + " value$jscomp$inline_1.slice(begin$jscomp$inline_2, end$jscomp$inline_3);",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentAndReassignedInPreviousArgument() {
+    test(
+        lines(
+            "function f(value, begin, end) {",
+            " return value.slice(begin, end);",
+            "}",
+            "window.g = function(a, b, c) {",
+            "  return f(a, b = c, b + 1);",
+            "};"),
+        lines(
+            "window.g = function(a, b, c) {", //
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            // Evaluates all args until `b=c` in order
+            "    var value$jscomp$inline_1 = a;",
+            "    var begin$jscomp$inline_2 = b = c;",
+            "    JSCompiler_inline_result$jscomp$0 ="
+                + " value$jscomp$inline_1.slice(begin$jscomp$inline_2, b + 1);",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentMultipleTimes() {
+    test(
+        lines(
+            "function f(value, begin, end) {",
+            " return value.slice(begin, end);",
+            "}",
+            "window.g = function(a, b, c) {",
+            // No temp needed as none of the arguments mutate state.
+            "  return f(a, b, b + 1);",
+            "};"),
+        lines("window.g = function(a, b, c) {", "  return a.slice(b, b + 1);", "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentMultipleTimes2() {
+    test(
+        lines(
+            "function f(value, begin, end) {",
+            " return value.slice(begin, end);",
+            "}",
+            "window.g = function(a, b, c) {",
+            "  return f(a, ++b, b++);",
+            "};"),
+        lines(
+            "window.g = function(a, b, c) {",
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            "    var value$jscomp$inline_1 = a;",
+            "    var begin$jscomp$inline_2 = ++b;",
+            "    var end$jscomp$inline_3 = b++;",
+            "    JSCompiler_inline_result$jscomp$0 ="
+                + " value$jscomp$inline_1.slice(begin$jscomp$inline_2, end$jscomp$inline_3);",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentMultipleTimes3() {
+    test(
+        lines(
+            "function add(a,b) {",
+            " return a+b;",
+            "}",
+            "window.g = function(value) {",
+            "  return add(++value, value++);",
+            "};"),
+        lines(
+            "window.g = function(value) {",
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            "    var a$jscomp$inline_1 = ++value;",
+            "    var b$jscomp$inline_2 = value++;",
+            "    JSCompiler_inline_result$jscomp$0 = a$jscomp$inline_1 + b$jscomp$inline_2;",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentMultipleTimes4() {
+    test(
+        lines(
+            "function add(a,b) {",
+            " return a+b;",
+            "}",
+            "window.g = function(value) {",
+            "  return add(++value, ++value);",
+            "};"),
+        lines(
+            "window.g = function(value) {",
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            "    var a$jscomp$inline_1 = ++value;",
+            "    var b$jscomp$inline_2 = ++value;",
+            "    JSCompiler_inline_result$jscomp$0 = a$jscomp$inline_1 + b$jscomp$inline_2;",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentMultipleTimes5() {
+    test(
+        lines(
+            "function add(value, a,b) {",
+            " return value+a+b;",
+            "}",
+            "window.g = function(value) {",
+            "  return add(value, ++value, ++value);",
+            "};"),
+        lines(
+            "window.g = function(value$jscomp$1) {",
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            "    var value$jscomp$inline_1 = value$jscomp$1;",
+            "    var a$jscomp$inline_2 = ++value$jscomp$1;",
+            "    var b$jscomp$inline_3 = ++value$jscomp$1;",
+            // This is correct.
+            "    JSCompiler_inline_result$jscomp$0 = value$jscomp$inline_1 + a$jscomp$inline_2 +"
+                + " b$jscomp$inline_3;",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
+  }
+
+  @Test
+  public void testVariableUsedAsArgumentMultipleTimes6() {
+    test(
+        lines(
+            "value = 10;",
+            "function add(a,b) {",
+            " return (value = 0)+a+b;",
+            "}",
+            "window.g = function() {",
+            "  return add(++value, ++value);",
+            "};"),
+        lines(
+            "value = 10;",
+            "window.g = function() {",
+            "  var JSCompiler_inline_result$jscomp$0;",
+            "  {",
+            "    var a$jscomp$inline_1 = ++value;",
+            "    var b$jscomp$inline_2 = ++value;",
+            "    JSCompiler_inline_result$jscomp$0 = (value = 0 ) + a$jscomp$inline_1 +"
+                + " b$jscomp$inline_2;",
+            "  }",
+            "  return JSCompiler_inline_result$jscomp$0;",
+            "};"));
   }
 }

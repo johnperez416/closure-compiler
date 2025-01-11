@@ -58,11 +58,9 @@
  ***************************************************************/
 package com.google.javascript.rhino.dtoa;
 
-import com.google.common.annotations.GwtIncompatible;
 import java.math.BigInteger;
 
-@GwtIncompatible("unnecessarily complex")
-public class DToA {
+public final class DToA {
 
   private static final int
       DTOSTR_STANDARD = 0, /* Either fixed or exponential format; round-trip */
@@ -294,6 +292,7 @@ public class DToA {
    * 2.49 will still round to 2, and 2.51 will still round to 3. */
   /* bufsize should be at least 20 for modes 0 and 1.  For the other modes,
    * bufsize should be two greater than the maximum number of output characters expected. */
+  @SuppressWarnings("BoxedPrimitiveEquality")
   private static int JS_dtoa(
       double d, int mode, boolean biasUp, int ndigits, boolean[] sign, StringBuilder buf) {
     /*  Arguments ndigits, decpt, sign are similar to those
@@ -1034,4 +1033,6 @@ public class DToA {
     DToA.JS_dtostr(buffer, DToA.DTOSTR_STANDARD, 0, value);
     return buffer.toString();
   }
+
+  private DToA() {}
 }

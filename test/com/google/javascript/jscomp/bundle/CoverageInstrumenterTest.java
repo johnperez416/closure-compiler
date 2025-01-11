@@ -20,7 +20,6 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.Answers.RETURNS_SMART_NULLS;
 import static org.mockito.Mockito.when;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.debugging.sourcemap.SourceMapConsumerV3;
@@ -28,7 +27,6 @@ import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping;
 import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping.Precision;
 import com.google.javascript.jscomp.JSError;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -37,7 +35,6 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 /** Tests for {@link CoverageInstrumenter}. */
-@GwtIncompatible
 @RunWith(JUnit4.class)
 public final class CoverageInstrumenterTest {
 
@@ -47,8 +44,8 @@ public final class CoverageInstrumenterTest {
   @Mock(answer = RETURNS_SMART_NULLS)
   CoverageInstrumenter.CompilerSupplier mockCompiler;
 
-  private static final Path FOO_JS = Paths.get("foo.js");
-  private static final Path SOURCE_JS = Paths.get("source.js");
+  private static final Path FOO_JS = Path.of("foo.js");
+  private static final Path SOURCE_JS = Path.of("source.js");
   private static final ImmutableList<JSError> NO_ERRORS = ImmutableList.of();
 
   @Before
@@ -92,7 +89,8 @@ public final class CoverageInstrumenterTest {
     CoverageInstrumenter.CompileResult result = compiler.compile(SOURCE_JS, "var x = 42;");
     String[] expected =
         new String[] {
-          "if(!self.window){self.window=self;self.window.top=self}",
+          "(function(self){if(!self.window){self.window=self;self.window.top=self}})(typeof"
+              + " self!==\"undefined\"?self:globalThis);",
           "var __jscov=window.top[\"__jscov\"]||",
           "(window.top[\"__jscov\"]={\"fileNames\":[],\"instrumentedLines\":[],\"executedLines\":[]});",
           "var JSCompiler_lcov_data_source_js=[];",

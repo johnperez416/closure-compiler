@@ -104,7 +104,6 @@ public class JSDocInfoTest {
     assertThat(info.hasType()).isTrue();
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   @Test
@@ -124,7 +123,6 @@ public class JSDocInfoTest {
     assertThat(info.hasType()).isTrue();
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   @Test
@@ -143,7 +141,6 @@ public class JSDocInfoTest {
     assertThat(info.hasType()).isFalse();
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   /** Tests that all module local names get correctly removed from a JSTypeExpression */
@@ -155,7 +152,7 @@ public class JSDocInfoTest {
     mockedModuleLocals.add("AnotherItem");
 
     JSTypeExpression newExpr = jsTypeExpression.replaceNamesWithUnknownType(mockedModuleLocals);
-    Set<String> replacedNames = newExpr.getAllTypeNames();
+    ImmutableSet<String> replacedNames = newExpr.getAllTypeNames();
     assertThat(replacedNames).doesNotContain("Item");
     assertThat(replacedNames).contains("string");
     assertThat(replacedNames).contains("boolean");
@@ -181,7 +178,6 @@ public class JSDocInfoTest {
     assertThat(info.hasType()).isFalse();
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   @Test
@@ -201,7 +197,6 @@ public class JSDocInfoTest {
     assertThat(info.hasType()).isFalse();
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   @Test
@@ -279,7 +274,6 @@ public class JSDocInfoTest {
     assertThat(info.isConstant()).isTrue();
     assertThat(info.isConstructor()).isFalse();
     assertThat(info.isDefine()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   @Test
@@ -291,7 +285,6 @@ public class JSDocInfoTest {
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isTrue();
     assertThat(info.isDefine()).isFalse();
-    assertThat(info.isHidden()).isFalse();
   }
 
   @Test
@@ -303,20 +296,6 @@ public class JSDocInfoTest {
     assertThat(info.isConstant()).isTrue();
     assertThat(info.isConstructor()).isFalse();
     assertThat(info.isDefine()).isTrue();
-    assertThat(info.isHidden()).isFalse();
-  }
-
-  @Test
-  public void testSetHidden() {
-    JSDocInfo.Builder builder = JSDocInfo.builder();
-    builder.recordHiddenness();
-    JSDocInfo info = builder.build();
-
-    assertThat(info.hasType()).isFalse();
-    assertThat(info.isConstant()).isFalse();
-    assertThat(info.isConstructor()).isFalse();
-    assertThat(info.isDefine()).isFalse();
-    assertThat(info.isHidden()).isTrue();
   }
 
   @Test
@@ -419,14 +398,14 @@ public class JSDocInfoTest {
     JSDocInfo.Builder builder = JSDocInfo.builder();
     builder.recordConstancy();
     builder.recordConstructor();
-    builder.recordHiddenness();
+    builder.recordNoCollapse();
     JSDocInfo info = builder.build();
 
     assertThat(info.hasType()).isFalse();
     assertThat(info.isConstant()).isTrue();
     assertThat(info.isConstructor()).isTrue();
     assertThat(info.isDefine()).isFalse();
-    assertThat(info.isHidden()).isTrue();
+    assertThat(info.isNoCollapse()).isTrue();
 
     builder = info.toBuilder();
     builder.recordMutable();
@@ -434,7 +413,7 @@ public class JSDocInfoTest {
 
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isDefine()).isFalse();
-    assertThat(info.isHidden()).isTrue();
+    assertThat(info.isNoCollapse()).isTrue();
   }
 
   @Test
@@ -463,7 +442,7 @@ public class JSDocInfoTest {
     builder.recordDescription("The source info");
     builder.recordConstancy();
     builder.recordConstructor();
-    builder.recordHiddenness();
+    builder.recordNoCollapse();
     builder.recordBaseType(
         new JSTypeExpression(new Node(Token.BANG, Node.newString("Number")), ""));
     builder.recordReturnType(fromString("string"));
@@ -477,7 +456,7 @@ public class JSDocInfoTest {
     assertType(resolve(cloned.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(cloned.isConstant()).isTrue();
     assertThat(cloned.isConstructor()).isTrue();
-    assertThat(cloned.isHidden()).isTrue();
+    assertThat(cloned.isNoCollapse()).isTrue();
 
     // TODO - cannot change these things!
     // cloned.recordDescription("The cloned info");
@@ -486,7 +465,7 @@ public class JSDocInfoTest {
 
     // assertType(resolve(cloned.getBaseType())).isEqualTo(getNativeType(STRING_TYPE));
     // assertThat(cloned.getDescription()).isEqualTo("The cloned info");
-    // assertThat(cloned.isHidden()).isFalse();
+    // assertThat(cloned.isNoCollapse()).isFalse();
 
     // // Original info should be unchanged.
     // assertType(resolve(info.getBaseType()))
@@ -495,7 +474,7 @@ public class JSDocInfoTest {
     // assertType(resolve(info.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     // assertThat(info.isConstant()).isTrue();
     // assertThat(info.isConstructor()).isTrue();
-    // assertThat(info.isHidden()).isTrue();
+    // assertThat(info.isNoCollapse()).isTrue();
   }
 
   @Test
@@ -504,7 +483,6 @@ public class JSDocInfoTest {
     builder.recordDescription("The source info");
     builder.recordConstancy();
     builder.recordConstructor();
-    builder.recordHiddenness();
     builder.recordBaseType(
         new JSTypeExpression(new Node(Token.BANG, Node.newString("Number")), ""));
     builder.recordReturnType(fromString("string"));
@@ -652,7 +630,7 @@ public class JSDocInfoTest {
     JSDocInfo.Builder builder = JSDocInfo.builder();
     builder.parseDocumentation();
     builder.recordSuppressions(ImmutableSet.of("sam", "bob"));
-    builder.addSuppression("fred");
+    builder.recordSuppression("fred");
     JSDocInfo info = builder.build();
     assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("bob", "sam", "fred"));
   }
@@ -709,15 +687,12 @@ public class JSDocInfoTest {
 
     // Set a description so that builder is initialized.
     builder.recordDescription("Lorem");
-
-    JSTypeExpression errorType = fromString("Error");
-    JSTypeExpression otherType = fromString("Other");
-    builder.recordThrowDescription(errorType, "Because it does.");
-    builder.recordThrowDescription(otherType, "");
+    builder.recordThrowsAnnotation("{Error} Because it does.");
+    builder.recordThrowsAnnotation("{not a type}");
     JSDocInfo info = builder.build();
-    assertThat(info.getThrowsDescriptionForType(errorType)).isEqualTo("Because it does.");
-    assertThat(info.getThrowsDescriptionForType(otherType)).isEmpty();
-    assertThat(info.getThrowsDescriptionForType(fromString("NeverSeen"))).isNull();
+    assertThat(info.getThrowsAnnotations())
+        .containsExactly("{Error} Because it does.", "{not a type}")
+        .inOrder();
   }
 
   // https://github.com/google/closure-compiler/issues/2328
@@ -745,7 +720,7 @@ public class JSDocInfoTest {
     JSDocInfo info = builder.build();
 
     // Then
-    Collection<Node> upperBoundRoots =
+    ImmutableList<Node> upperBoundRoots =
         info.getTemplateTypes().values().stream()
             .map(JSTypeExpression::getRoot)
             .collect(toImmutableList());

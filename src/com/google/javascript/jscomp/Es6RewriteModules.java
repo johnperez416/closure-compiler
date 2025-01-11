@@ -18,21 +18,19 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.javascript.jscomp.AstFactory.type;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_CLOSURE_CALL_SCOPE_ERROR;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_DESTRUCTURING_FORWARD_DECLARE;
-import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_FORWARD_DECLARE_NAMESPACE;
-import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_GET_CALL_SCOPE;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_GET_NAMESPACE;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_REQUIRE_NAMESPACE;
-import static com.google.javascript.jscomp.ClosurePrimitiveErrors.INVALID_REQUIRE_TYPE_NAMESPACE;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.MISSING_MODULE_OR_PROVIDE;
 import static com.google.javascript.jscomp.ClosurePrimitiveErrors.MODULE_USES_GOOG_MODULE_GET;
 import static com.google.javascript.jscomp.ClosureRewriteModule.ILLEGAL_MODULE_RENAMING_CONFLICT;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature.MODULES;
 
 import com.google.common.base.Splitter;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Table;
+import com.google.javascript.jscomp.CompilerOptions.ChunkOutputType;
 import com.google.javascript.jscomp.ModuleRenaming.GlobalizedModuleName;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.jscomp.deps.ModuleLoader;
@@ -49,12 +47,12 @@ import com.google.javascript.rhino.QualifiedName;
 import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeNative;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Rewrites a ES6 module into a form that can be safely concatenated. Note that we treat a file as
@@ -90,7 +88,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
   private final JSType unknownType;
   private static final Splitter DOT_SPLITTER = Splitter.on(".");
 
-  @Nullable private final PreprocessorSymbolTable preprocessorSymbolTable;
+  private final @Nullable PreprocessorSymbolTable preprocessorSymbolTable;
 
   /**
    * Local variable names that were goog.require'd to qualified name we need to line.
@@ -132,6 +130,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
   private final ModuleMetadataMap moduleMetadataMap;
   private final ModuleMap moduleMap;
   private final TypedScope globalTypedScope;
+  private final ChunkOutputType chunkOutputType;
 
   /**
    * Creates a new Es6RewriteModules instance which can be used to rewrite ES6 modules to a
@@ -143,6 +142,26 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
       ModuleMap moduleMap,
       @Nullable PreprocessorSymbolTable preprocessorSymbolTable,
       @Nullable TypedScope globalTypedScope) {
+    this(
+        compiler,
+        moduleMetadataMap,
+        moduleMap,
+        preprocessorSymbolTable,
+        globalTypedScope,
+        ChunkOutputType.GLOBAL_NAMESPACE);
+  }
+
+  /**
+   * Creates a new Es6RewriteModules instance which can be used to rewrite ES6 modules to a
+   * concatenable form.
+   */
+  Es6RewriteModules(
+      AbstractCompiler compiler,
+      ModuleMetadataMap moduleMetadataMap,
+      ModuleMap moduleMap,
+      @Nullable PreprocessorSymbolTable preprocessorSymbolTable,
+      @Nullable TypedScope globalTypedScope,
+      ChunkOutputType chunkOutputType) {
     checkNotNull(moduleMetadataMap);
     this.compiler = compiler;
     this.astFactory = compiler.createAstFactory();
@@ -151,11 +170,10 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
     this.preprocessorSymbolTable = preprocessorSymbolTable;
     this.globalTypedScope = globalTypedScope;
     this.unknownType = compiler.getTypeRegistry().getNativeType(JSTypeNative.UNKNOWN_TYPE);
+    this.chunkOutputType = chunkOutputType;
   }
 
-  /**
-   * Return whether or not the given script node represents an ES6 module file.
-   */
+  /** Return whether or not the given script node represents an ES6 module file. */
   public static boolean isEs6ModuleRoot(Node scriptNode) {
     checkArgument(scriptNode.isScript(), scriptNode);
     if (scriptNode.getBooleanProp(Node.GOOG_MODULE)) {
@@ -169,39 +187,44 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
     checkArgument(externs.isRoot(), externs);
     checkArgument(root.isRoot(), root);
     NodeTraversal.traverseRoots(compiler, this, externs, root);
-    compiler.setFeatureSet(compiler.getFeatureSet().without(MODULES));
+    // It is unusual to call this NodeUtil method instead of the TranspilationPasses one. This
+    // pass is included in the {@code dependency_resolution} BUILD target and does not have access
+    // to {@code TranspilationPasses}. Adding that dep produces a cycle in the BUILD dep graph.
+    // Regular transpiler passes must use the {@code
+    // TranspilationPasses.maybeMarkFeaturesAsTranspiledAway}
+    NodeUtil.removeFeatureFromAllScripts(root, Feature.MODULES, compiler);
     // This pass may add getters properties on module objects.
     GatherGetterAndSetterProperties.update(compiler, externs, root);
   }
 
   private void clearPerFileState() {
-    this.typedefs = new HashSet<>();
-    this.namesToInlineByAlias = new HashMap<>();
+    this.typedefs = new LinkedHashSet<>();
+    this.namesToInlineByAlias = new LinkedHashMap<>();
   }
+
+  private static final QualifiedName GOOG_REQUIRE = QualifiedName.of("goog.require");
+  private static final QualifiedName GOOG_REQUIRETYPE = QualifiedName.of("goog.requireType");
+  private static final QualifiedName GOOG_MODULE_GET = QualifiedName.of("goog.module.get");
+  private static final QualifiedName GOOG_FORWARDDECLARE = QualifiedName.of("goog.forwardDeclare");
+  private static final QualifiedName GOOG_DECLAREMODULEID =
+      QualifiedName.of("goog.declareModuleId");
 
   /**
    * Checks for goog.require, goog.requireType, goog.module.get and goog.forwardDeclare calls that
    * are meant to import ES6 modules and rewrites them.
    */
   private class RewriteRequiresForEs6Modules extends AbstractPostOrderCallback {
-    private boolean transpiled = false;
     // An (s, old, new) entry indicates that occurrences of `old` in scope `s` should be rewritten
     // as `new`. This is used to rewrite namespaces that appear in calls to goog.requireType and
     // goog.forwardDeclare.
     private Table<Node, String, String> renameTable;
 
     void rewrite(Node scriptNode) {
-      transpiled = false;
       renameTable = HashBasedTable.create();
       NodeTraversal.traverse(compiler, scriptNode, this);
 
-      if (transpiled) {
-        scriptNode.putBooleanProp(Node.TRANSPILED, true);
-      }
-
       if (!renameTable.isEmpty()) {
-        NodeTraversal.traverse(
-            compiler, scriptNode, new Es6RenameReferences(renameTable, /* typesOnly= */ true));
+        NodeTraversal.traverse(compiler, scriptNode, new Es6RenameTypeReferences(renameTable));
       }
     }
 
@@ -211,25 +234,23 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
         return;
       }
 
-      boolean isRequire = n.getFirstChild().matchesQualifiedName("goog.require");
-      boolean isRequireType = n.getFirstChild().matchesQualifiedName("goog.requireType");
-      boolean isGet = n.getFirstChild().matchesQualifiedName("goog.module.get");
-      boolean isForwardDeclare = n.getFirstChild().matchesQualifiedName("goog.forwardDeclare");
+      Node callTarget = n.getFirstChild();
+      if (!callTarget.isGetProp()) {
+        return;
+      }
+
+      boolean isRequire = GOOG_REQUIRE.matches(callTarget);
+      boolean isRequireType = GOOG_REQUIRETYPE.matches(callTarget);
+      boolean isGet = GOOG_MODULE_GET.matches(callTarget);
+      boolean isForwardDeclare = GOOG_FORWARDDECLARE.matches(callTarget);
 
       if (!isRequire && !isRequireType && !isGet && !isForwardDeclare) {
         return;
       }
 
       if (!n.hasTwoChildren() || !n.getLastChild().isStringLit()) {
-        if (isRequire) {
-          t.report(n, INVALID_REQUIRE_NAMESPACE);
-        } else if (isRequireType) {
-          t.report(n, INVALID_REQUIRE_TYPE_NAMESPACE);
-        } else if (isGet) {
-          t.report(n, INVALID_GET_NAMESPACE);
-        } else {
-          t.report(n, INVALID_FORWARD_DECLARE_NAMESPACE);
-        }
+        // Reported in CheckClosureImports, don't report here.
+
         return;
       }
 
@@ -252,7 +273,6 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
       }
 
       if (isGet && t.inGlobalHoistScope()) {
-        t.report(n, INVALID_GET_CALL_SCOPE);
         return;
       }
 
@@ -332,7 +352,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
             n.replaceWith(
                 astFactory
                     .createName(
-                        ModuleRenaming.getGlobalName(moduleMetadata, name).getRoot(), n.getJSType())
+                        ModuleRenaming.getGlobalName(moduleMetadata, name).getRoot(), type(n))
                     .srcrefTree(n));
             t.reportCodeChange();
           }
@@ -352,14 +372,12 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
             n.replaceWith(
                 astFactory
                     .createName(
-                        ModuleRenaming.getGlobalName(moduleMetadata, name).getRoot(), n.getJSType())
+                        ModuleRenaming.getGlobalName(moduleMetadata, name).getRoot(), type(n))
                     .srcrefTree(n));
           }
         }
         t.reportCodeChange();
       }
-
-      transpiled = true;
     }
   }
 
@@ -371,7 +389,6 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
       new RewriteRequiresForEs6Modules().rewrite(n);
       if (isEs6ModuleRoot(n)) {
         clearPerFileState();
-        n.putBooleanProp(Node.TRANSPILED, true);
       } else {
         return false;
       }
@@ -390,22 +407,25 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
     } else if (n.isScript()) {
       visitScript(t, n);
     } else if (n.isCall()) {
-      // TODO(johnplaisted): Consolidate on declareModuleId.
-      if (n.getFirstChild().matchesQualifiedName("goog.declareModuleId")) {
+      if (GOOG_DECLAREMODULEID.matches(n.getFirstChild())) {
         n.getParent().detach();
       }
     } else if (n.isImportMeta()) {
-      // We're choosing to not "support" import.meta because currently all the outputs from the
-      // compiler are scripts and support for import.meta (only works in modules) would be
-      // meaningless
-      t.report(n, Es6ToEs3Util.CANNOT_CONVERT, "import.meta");
+      if (chunkOutputType != ChunkOutputType.ES_MODULES) {
+        // Since import.meta cannot be transpiled, we are only supporting it when the output format
+        // is a module. The default output format type is just script.
+        t.report(
+            n,
+            TranspilationUtil.CANNOT_CONVERT,
+            "import.meta. Use --chunk_output_type=ES_MODULES to allow passthrough support.");
+      }
     }
   }
 
   private void maybeWarnExternModule(NodeTraversal t, Node n, Node parent) {
     checkState(parent.isModuleBody());
     if (parent.isFromExterns() && !NodeUtil.isFromTypeSummary(parent.getParent())) {
-      t.report(n, Es6ToEs3Util.CANNOT_CONVERT_YET, "ES6 modules in externs");
+      t.report(n, TranspilationUtil.CANNOT_CONVERT_YET, "ES6 modules in externs");
     }
   }
 
@@ -503,7 +523,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
       t.reportCodeChange();
     } else if (export.getBooleanProp(Node.EXPORT_ALL_FROM)
         || export.hasTwoChildren()
-        || export.getFirstChild().getToken() == Token.EXPORT_SPECS) {
+        || export.getFirstChild().isExportSpecs()) {
       //   export * from 'moduleIdentifier';
       //   export {x, y as z} from 'moduleIdentifier';
       //   export {Foo};
@@ -515,17 +535,10 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
   }
 
   private void visitExportNameDeclaration(Node declaration) {
-    //    export var Foo;
-    //    export let {a, b:[c,d]} = {};
-    List<Node> lhsNodes = NodeUtil.findLhsNodesInNode(declaration);
-
-    for (Node lhs : lhsNodes) {
-      checkState(lhs.isName());
-      String name = lhs.getString();
-
-      if (declaration.getJSDocInfo() != null && declaration.getJSDocInfo().hasTypedefType()) {
-        typedefs.add(name);
-      }
+    if (declaration.getJSDocInfo() != null && declaration.getJSDocInfo().hasTypedefType()) {
+      //    export var Foo;
+      //    export let {a, b:[c,d]} = {};
+      NodeUtil.visitLhsNodesInNode(declaration, (lhs) -> typedefs.add(lhs.getString()));
     }
   }
 
@@ -553,7 +566,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
   private void visitScript(NodeTraversal t, Node script) {
     final Node moduleBody = script.getFirstChild();
     // TypedScopeCreator sets the module object type on the MODULE_BODY during type checking.
-    final AstFactory.Type moduleObjectType = AstFactory.type(moduleBody);
+    final AstFactory.Type moduleObjectType = type(moduleBody);
     inlineModuleToGlobalScope(moduleBody);
 
     ClosureRewriteModule.checkAndSetStrictModeDirective(t, script);
@@ -631,7 +644,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
       String boundVariableName = boundVariableQualifiedName.getRoot();
 
       Node getProp =
-          astFactory.createGetProp(
+          astFactory.createGetPropWithoutColor(
               astFactory.createName(moduleName, moduleObjectType), exportedName);
       getProp.putBooleanProp(Node.MODULE_EXPORT, true);
 
@@ -649,7 +662,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
         Node exprResult = astFactory.exprResult(getProp).srcrefTreeIfMissing(nodeForSourceInfo);
         script.addChildToBack(exprResult);
       } else if (mutated) {
-        final Node globalExportName = astFactory.createName(boundVariableName, getProp.getJSType());
+        final Node globalExportName = astFactory.createName(boundVariableName, type(getProp));
         addGetterExport(script, nodeForSourceInfo, moduleObject, exportedName, globalExportName);
         NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.GETTER, compiler);
       } else {
@@ -657,7 +670,7 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
         // exports.foo = foo;
         Node assign =
             astFactory.createAssign(
-                getProp, astFactory.createName(boundVariableName, getProp.getJSType()));
+                getProp, astFactory.createName(boundVariableName, type(getProp)));
         // TODO(b/144593112): Stop adding JSDoc when this pass moves to always be after typechecking
         JSDocInfo.Builder builder = JSDocInfo.builder().parseDocumentation();
         builder.recordConstancy();
@@ -702,14 +715,13 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
             (NodeTraversal t, Node n, Node parent) -> {
               if (n.isCall()) {
                 Node fn = n.getFirstChild();
-                if (fn.matchesQualifiedName("goog.require")
-                    || fn.matchesQualifiedName("goog.requireType")) {
+                if (GOOG_REQUIRE.matches(fn) || GOOG_REQUIRETYPE.matches(fn)) {
                   // TODO(tjgq): This will rewrite both type references and code references. For
                   // goog.requireType, the latter are potentially broken because the symbols aren't
                   // guaranteed to be available at run time. A separate pass needs to be added to
                   // detect these incorrect uses of goog.requireType.
                   visitRequireOrGet(t, n, parent, /* isRequire= */ true);
-                } else if (fn.matchesQualifiedName("goog.module.get")) {
+                } else if (GOOG_MODULE_GET.matches(fn)) {
                   visitGoogModuleGet(t, n, parent);
                 }
               }
@@ -999,13 +1011,13 @@ public final class Es6RewriteModules implements CompilerPass, NodeTraversal.Call
         newNode =
             // we might encounter a name not in the global scope when requiring a missing symbol.
             globalTypedScope != null && globalTypedScope.hasSlot(root)
-                ? astFactory.createQName(globalTypedScope, globalName.join())
+                ? astFactory.createQNameUsingJSTypeInfo(globalTypedScope, globalName.join())
                 : astFactory.createQNameWithUnknownType(globalName.join());
       } else {
         // Because this pass does not update the global scope with injected names, t.getScope()
         // will not contain a declaration for this global name. Fortunately, we already have the
         // JSType on the existing node to pass to AstFactory.
-        newNode = astFactory.createName(globalName.getRoot(), n.getJSType());
+        newNode = astFactory.createName(globalName.getRoot(), type(n));
       }
 
       // For kythe: the new node only represents the last name it replaced, not all the names.

@@ -19,13 +19,8 @@ import static com.google.common.base.Preconditions.checkState;
 
 import com.google.javascript.rhino.Node;
 
-/**
- * Checks whether there are J2CL generated source files with pattern "*.java.js".
- */
+/** Checks whether there are J2CL generated source files with pattern "*.java.js". */
 final class J2clSourceFileChecker implements CompilerPass {
-
-  static final String HAS_J2CL_ANNOTATION_KEY = "HAS_J2CL";
-
   private final AbstractCompiler compiler;
 
   J2clSourceFileChecker(AbstractCompiler compiler) {
@@ -50,7 +45,7 @@ final class J2clSourceFileChecker implements CompilerPass {
   }
 
   static void markToRunJ2clPasses(AbstractCompiler compiler) {
-    compiler.setAnnotation(HAS_J2CL_ANNOTATION_KEY, true);
+    compiler.setRunJ2clPasses(true);
   }
 
   /**
@@ -58,6 +53,6 @@ final class J2clSourceFileChecker implements CompilerPass {
    * example, if the compiler's HAS_J2CL annotation is false, it should.
    */
   static boolean shouldRunJ2clPasses(AbstractCompiler compiler) {
-    return Boolean.TRUE.equals(compiler.getAnnotation(HAS_J2CL_ANNOTATION_KEY));
+    return compiler.runJ2clPasses();
   }
 }

@@ -47,12 +47,12 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.truth.FailureMetadata;
 import com.google.common.truth.Subject;
+import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.javascript.rhino.ClosurePrimitive;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
 import java.util.Objects;
-import javax.annotation.CheckReturnValue;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A Truth Subject for the JSType interface. Usage:

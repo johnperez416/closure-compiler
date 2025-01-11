@@ -19,18 +19,13 @@ package com.google.javascript.jscomp;
 import com.google.debugging.sourcemap.SourceMapConsumerV3;
 import com.google.debugging.sourcemap.SourceMapParseException;
 import java.io.IOException;
-import java.io.Serializable;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
-/**
- * A lazy-loaded SourceMapConsumerV3 instance.
- */
-public final class SourceMapInput implements Serializable {
+/** A lazy-loaded SourceMapConsumerV3 instance. */
+public final class SourceMapInput {
   private final SourceFile sourceFile;
-  // No need to serialize the consumer, it will be recreated because the serialized version will
-  // have cached = false.
-  private transient volatile SourceMapConsumerV3 parsedSourceMap = null;
-  private transient volatile boolean cached = false;
+  private volatile @Nullable SourceMapConsumerV3 parsedSourceMap = null;
+  private volatile boolean cached = false;
 
   static final DiagnosticType SOURCEMAP_RESOLVE_FAILED =
       DiagnosticType.warning("SOURCEMAP_RESOLVE_FAILED", "Failed to resolve sourcemap at {0}: {1}");
@@ -51,7 +46,7 @@ public final class SourceMapInput implements Serializable {
     if (!cached) {
       // Avoid re-reading or reparsing files.
       cached = true;
-      String sourceMapPath = sourceFile.getOriginalPath();
+      String sourceMapPath = sourceFile.getName();
       try {
         String sourceMapContents = sourceFile.getCode();
         SourceMapConsumerV3 consumer = new SourceMapConsumerV3();
@@ -74,6 +69,14 @@ public final class SourceMapInput implements Serializable {
    * Gets the original location of this sourcemap file on disk.
    */
   public String getOriginalPath() {
-    return sourceFile.getOriginalPath();
+    return sourceFile.getName();
+  }
+
+  public @Nullable String getRawSourceMapContents() {
+    try {
+      return this.sourceFile.getCode();
+    } catch (IOException e) {
+      return null;
+    }
   }
 }

@@ -22,16 +22,16 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterables;
 import com.google.debugging.sourcemap.Base64VLQ.CharIterator;
 import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping;
-import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping.Builder;
 import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping.Precision;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Class for parsing version 3 of the SourceMap format, as produced by the Closure Compiler, etc.
@@ -45,7 +45,7 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
   private String[] names;
   private int lineCount;
   // Slots in the lines list will be null if the line does not have any entries.
-  private ArrayList<ArrayList<Entry>> lines = null;
+  private @Nullable ArrayList<ArrayList<Entry>> lines = null;
   /** originalFile path ==> original line ==> target mappings */
   private Map<String, Map<Integer, Collection<OriginalMapping>>>
       reverseSourceMapping;
@@ -69,7 +69,7 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
   }
 
   /** Parses the given contents containing a source map. */
-  public void parse(SourceMapObject sourceMapObject, SourceMapSupplier sectionSupplier)
+  public void parse(SourceMapObject sourceMapObject, @Nullable SourceMapSupplier sectionSupplier)
       throws SourceMapParseException {
     if (sourceMapObject.getVersion() != 3) {
       throw new SourceMapParseException("Unknown version: " + sourceMapObject.getVersion());
@@ -104,12 +104,8 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
     new MappingBuilder(sourceMapObject.getMappings()).build();
   }
 
-  /**
-   * @param sourceMapObject
-   * @throws SourceMapParseException
-   */
-  private void parseMetaMap(
-      SourceMapObject sourceMapObject, SourceMapSupplier sectionSupplier)
+  /** */
+  private void parseMetaMap(SourceMapObject sourceMapObject, SourceMapSupplier sectionSupplier)
       throws SourceMapParseException {
     if (sectionSupplier == null) {
       sectionSupplier = new DefaultSourceMapSupplier();
@@ -147,7 +143,7 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
   }
 
   @Override
-  public OriginalMapping getMappingForLine(int lineNumber, int column) {
+  public @Nullable OriginalMapping getMappingForLine(int lineNumber, int column) {
     // Normalize the line and column numbers to 0.
     lineNumber--;
     column--;
@@ -181,8 +177,12 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
     return Arrays.asList(sources);
   }
 
-  public Collection<String> getOriginalSourcesContent() {
+  public @Nullable Collection<String> getOriginalSourcesContent() {
     return sourcesContent == null ? null : Arrays.asList(sourcesContent);
+  }
+
+  public List<String> getOriginalNames() {
+    return Arrays.asList(names);
   }
 
   @Override
@@ -420,11 +420,8 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
     return entries.get(entry).getGeneratedColumn() - target;
   }
 
-  /**
-   * Returns the mapping entry that proceeds the supplied line or null if no
-   * such entry exists.
-   */
-  private OriginalMapping getPreviousMapping(int lineNumber) {
+  /** Returns the mapping entry that proceeds the supplied line or null if no such entry exists. */
+  private @Nullable OriginalMapping getPreviousMapping(int lineNumber) {
     do {
       if (lineNumber == 0) {
         return null;
@@ -436,12 +433,12 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
   }
 
   /** Creates an "OriginalMapping" object for the given entry object. */
-  private OriginalMapping getOriginalMappingForEntry(Entry entry, Precision precision) {
+  private @Nullable OriginalMapping getOriginalMappingForEntry(Entry entry, Precision precision) {
     if (entry.getSourceFileId() == UNMAPPED) {
       return null;
     } else {
       // Adjust the line/column here to be start at 1.
-      Builder x =
+      OriginalMapping.Builder x =
           OriginalMapping.newBuilder()
               .setOriginalFile(sources[entry.getSourceFileId()])
               .setLineNumber(entry.getSourceLine() + 1)
@@ -460,21 +457,19 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
    * OriginalMappings.
    */
   private void createReverseMapping() {
-    reverseSourceMapping = new HashMap<>();
+    reverseSourceMapping = new LinkedHashMap<>();
 
     for (int targetLine = 0; targetLine < lines.size(); targetLine++) {
       ArrayList<Entry> entries = lines.get(targetLine);
 
       if (entries != null) {
         for (Entry entry : entries) {
-          if (entry.getSourceFileId() != UNMAPPED
-              && entry.getSourceLine() != UNMAPPED) {
+          if (entry.getSourceFileId() != UNMAPPED && entry.getSourceLine() != UNMAPPED) {
             String originalFile = sources[entry.getSourceFileId()];
 
-            if (!reverseSourceMapping.containsKey(originalFile)) {
-              reverseSourceMapping.put(originalFile,
-                  new HashMap<Integer, Collection<OriginalMapping>>());
-            }
+            reverseSourceMapping.computeIfAbsent(
+                originalFile,
+                (String k) -> new LinkedHashMap<Integer, Collection<OriginalMapping>>());
 
             Map<Integer, Collection<OriginalMapping>> lineToCollectionMap =
                 reverseSourceMapping.get(originalFile);
@@ -489,8 +484,10 @@ public final class SourceMapConsumerV3 implements SourceMapConsumer, SourceMappi
             Collection<OriginalMapping> mappings =
                 lineToCollectionMap.get(sourceLine);
 
-            Builder builder = OriginalMapping.newBuilder().setLineNumber(
-                targetLine).setColumnPosition(entry.getGeneratedColumn());
+            OriginalMapping.Builder builder =
+                OriginalMapping.newBuilder()
+                    .setLineNumber(targetLine)
+                    .setColumnPosition(entry.getGeneratedColumn());
 
             mappings.add(builder.build());
           }

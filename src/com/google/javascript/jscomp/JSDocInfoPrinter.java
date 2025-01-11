@@ -21,6 +21,7 @@ import static java.util.Comparator.naturalOrder;
 import com.google.common.base.Ascii;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.JSDocInfo.Visibility;
 import com.google.javascript.rhino.JSTypeExpression;
@@ -30,7 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Prints a JSDocInfo, used for preserving type annotations in ES6 transpilation.
@@ -74,6 +75,13 @@ public final class JSDocInfoPrinter {
       parts.add("@" + Ascii.toLowerCase(info.getVisibility().toString()));
     }
 
+    if (info.getAuthors() != null) {
+      multiline = true;
+      for (String name : info.getAuthors()) {
+        parts.add("@author " + name);
+      }
+    }
+
     if (info.isAbstract()) {
       parts.add("@abstract");
     }
@@ -94,6 +102,13 @@ public final class JSDocInfoPrinter {
     if (description != null) {
       multiline = true;
       parts.add("@desc " + description);
+    }
+
+    if (info.getReferences() != null) {
+      multiline = true;
+      for (String desc : info.getReferences()) {
+        parts.add("@see " + desc);
+      }
     }
 
     if (info.isWizaction()) {
@@ -130,6 +145,14 @@ public final class JSDocInfoPrinter {
 
     if (info.isNoInline()) {
       parts.add("@noinline");
+    }
+
+    if (info.isRequireInlining()) {
+      parts.add("@requireInlining");
+    }
+
+    if (info.isProvideAlreadyProvided()) {
+      parts.add("@provideAlreadyProvided");
     }
 
     if (info.isIdGenerator()) {
@@ -176,6 +199,10 @@ public final class JSDocInfoPrinter {
       parts.add("@record");
     }
 
+    if (info.isClosureUnawareCode()) {
+      parts.add("@closureUnaware");
+    }
+
     if (info.hasBaseType()) {
       multiline = true;
       Node typeNode = stripBang(info.getBaseType().getRoot());
@@ -213,8 +240,9 @@ public final class JSDocInfoPrinter {
           buildAnnotationWithType("return", info.getReturnType(), info.getReturnDescription()));
     }
 
-    if (!info.getThrownTypes().isEmpty()) {
-      parts.add(buildAnnotationWithType("throws", info.getThrownTypes().get(0)));
+    if (!info.getThrowsAnnotations().isEmpty() && !info.getThrowsAnnotations().get(0).isEmpty()) {
+      multiline = true;
+      parts.add("@throws " + info.getThrowsAnnotations().get(0));
     }
 
     ImmutableMap<String, JSTypeExpression> templates = info.getTemplateTypes();
@@ -277,17 +305,29 @@ public final class JSDocInfoPrinter {
       parts.add("@nocollapse");
     }
 
-    Set<String> suppressions = info.getSuppressions();
+    ImmutableMap<ImmutableSet<String>, String> suppressions =
+        info.getSuppressionsAndTheirDescription();
     if (!suppressions.isEmpty()) {
-      // Print suppressions in sorted order to avoid non-deterministic output.
-      String[] arr = suppressions.toArray(new String[0]);
-      Arrays.sort(arr, naturalOrder());
-      parts.add("@suppress {" + Joiner.on(',').join(arr) + "}");
+      // With ImmutableMap, the iteration order will be same as insertion order (i.e. parse order).
+      for (Map.Entry<ImmutableSet<String>, String> suppression : suppressions.entrySet()) {
+        String[] warnings = suppression.getKey().toArray(new String[0]);
+        // Even the warnings inside a suppress annotation are printed in natural order for
+        // consistency
+        Arrays.sort(warnings, naturalOrder());
+        String text = suppression.getValue();
+        StringBuilder sb = new StringBuilder();
+        sb.append("@suppress {").append(Joiner.on(',').join(warnings)).append("}");
+        if (!text.isEmpty()) {
+          sb.append(" ").append(text);
+        }
+        parts.add(sb.toString());
+      }
       multiline = true;
     }
 
     if (info.isDeprecated()) {
-      parts.add("@deprecated " + info.getDeprecationReason());
+      String deprecationReason = info.getDeprecationReason();
+      parts.add("@deprecated" + (deprecationReason != null ? " " + deprecationReason : ""));
       multiline = true;
     }
 
@@ -318,6 +358,10 @@ public final class JSDocInfoPrinter {
 
     if (info.isNgInject()) {
       parts.add("@ngInject");
+    }
+
+    for (String tsType : info.getTsTypes()) {
+      parts.add("@tsType " + tsType);
     }
 
     if (printDesc && info.getBlockDescription() != null) {
@@ -364,7 +408,7 @@ public final class JSDocInfoPrinter {
   }
 
   private String buildAnnotationWithType(
-      String annotation, JSTypeExpression type, String description) {
+      String annotation, JSTypeExpression type, @Nullable String description) {
     return buildAnnotationWithType(annotation, type.getRoot(), description);
   }
 
@@ -372,7 +416,8 @@ public final class JSDocInfoPrinter {
     return buildAnnotationWithType(annotation, type, null);
   }
 
-  private String buildAnnotationWithType(String annotation, Node type, String description) {
+  private String buildAnnotationWithType(
+      String annotation, Node type, @Nullable String description) {
     StringBuilder sb = new StringBuilder();
     sb.append("@");
     sb.append(annotation);
@@ -415,73 +460,87 @@ public final class JSDocInfoPrinter {
       sb.append(typeNode.getOriginalName());
       return;
     }
-    if (typeNode.getToken() == Token.BANG) {
-      sb.append("!");
-      appendTypeNode(sb, typeNode.getFirstChild());
-    } else if (typeNode.getToken() == Token.EQUALS) {
-      appendTypeNode(sb, typeNode.getFirstChild());
-      sb.append("=");
-    } else if (typeNode.getToken() == Token.PIPE) {
-      sb.append("(");
-      Node lastChild = typeNode.getLastChild();
-      for (Node child = typeNode.getFirstChild(); child != null; child = child.getNext()) {
-        appendTypeNode(sb, child);
-        if (child != lastChild) {
-          sb.append("|");
-        }
-      }
-      sb.append(")");
-    } else if (typeNode.getToken() == Token.ITER_REST) {
-      sb.append("...");
-      if (typeNode.hasChildren() && !typeNode.getFirstChild().isEmpty()) {
+    switch (typeNode.getToken()) {
+      case BANG:
+        sb.append("!");
         appendTypeNode(sb, typeNode.getFirstChild());
-      }
-    } else if (typeNode.getToken() == Token.STAR) {
-      sb.append("*");
-    } else if (typeNode.getToken() == Token.QMARK) {
-      sb.append("?");
-      if (typeNode.hasChildren()) {
+        break;
+      case EQUALS:
         appendTypeNode(sb, typeNode.getFirstChild());
-      }
-    } else if (typeNode.isFunction()) {
-      appendFunctionNode(sb, typeNode);
-    } else if (typeNode.getToken() == Token.LC) {
-      sb.append("{");
-      Node lb = typeNode.getFirstChild();
-      Node lastColon = lb.getLastChild();
-      for (Node colon = lb.getFirstChild(); colon != null; colon = colon.getNext()) {
-        if (colon.hasChildren()) {
-          sb.append(colon.getFirstChild().getString()).append(":");
-          appendTypeNode(sb, colon.getLastChild());
-        } else {
-          sb.append(colon.getString());
+        sb.append("=");
+        break;
+      case PIPE:
+        sb.append("(");
+        Node lastChild = typeNode.getLastChild();
+        for (Node child = typeNode.getFirstChild(); child != null; child = child.getNext()) {
+          appendTypeNode(sb, child);
+          if (child != lastChild) {
+            sb.append("|");
+          }
         }
-        if (colon != lastColon) {
-          sb.append(",");
+        sb.append(")");
+        break;
+      case ITER_REST:
+        sb.append("...");
+        if (typeNode.hasChildren() && !typeNode.getFirstChild().isEmpty()) {
+          appendTypeNode(sb, typeNode.getFirstChild());
         }
-      }
-      sb.append("}");
-    } else if (typeNode.isVoid()) {
-      sb.append("void");
-    } else if (typeNode.isTypeOf()) {
-      sb.append("typeof ");
-      appendTypeNode(sb, typeNode.getFirstChild());
-    } else {
-      if (typeNode.hasChildren()) {
-        sb.append(typeNode.getString())
-            .append("<");
-        Node child = typeNode.getFirstChild();
-        Node last = child.getLastChild();
-        for (Node type = child.getFirstChild(); type != null; type = type.getNext()) {
+        break;
+      case STAR:
+        sb.append("*");
+        break;
+      case QMARK:
+        sb.append("?");
+        if (typeNode.hasChildren()) {
+          appendTypeNode(sb, typeNode.getFirstChild());
+        }
+        break;
+      case FUNCTION:
+        appendFunctionNode(sb, typeNode);
+        break;
+      case LC:
+        sb.append("{");
+        Node lb = typeNode.getFirstChild();
+        Node lastColon = lb.getLastChild();
+        for (Node colon = lb.getFirstChild(); colon != null; colon = colon.getNext()) {
+          if (colon.hasChildren()) {
+            sb.append(colon.getFirstChild().getString()).append(":");
+            appendTypeNode(sb, colon.getLastChild());
+          } else {
+            sb.append(colon.getString());
+          }
+          if (colon != lastColon) {
+            sb.append(",");
+          }
+        }
+        sb.append("}");
+        break;
+      case VOID:
+        sb.append("void");
+        break;
+      case TYPEOF:
+        sb.append("typeof ");
+        appendTypeNode(sb, typeNode.getFirstChild());
+        break;
+      case BLOCK:
+        sb.append("<");
+        Node last = typeNode.getLastChild();
+        for (Node type = typeNode.getFirstChild(); type != null; type = type.getNext()) {
           appendTypeNode(sb, type);
           if (type != last) {
             sb.append(",");
           }
         }
         sb.append(">");
-      } else {
+        break;
+      case STRINGLIT:
         sb.append(typeNode.getString());
-      }
+        if (typeNode.hasChildren()) {
+          appendTypeNode(sb, typeNode.getOnlyChild());
+        }
+        break;
+      default:
+        throw new IllegalStateException("Unexpected typeNode: " + typeNode);
     }
   }
 

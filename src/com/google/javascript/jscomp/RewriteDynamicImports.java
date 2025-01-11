@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.javascript.jscomp.AstFactory.type;
 import static com.google.javascript.jscomp.ConvertChunksToESModules.DYNAMIC_IMPORT_CALLBACK_FN;
 import static com.google.javascript.jscomp.ConvertChunksToESModules.UNABLE_TO_COMPUTE_RELATIVE_PATH;
 
@@ -39,12 +40,12 @@ import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.jstype.TemplateType;
 import com.google.javascript.rhino.jstype.TemplatizedType;
 import java.util.Iterator;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Rewrite dynamic import expressions to account for bundling and module rewriting. Since dynamic
  * imports cannot be fully polyfilled, optionally support replacing the expression with a function
- * call which indicates an external polyfill is utilized.
+ * call (alias function) which indicates an external polyfill is utilized.
  *
  * <p>If the import specifier is a string literal and the module resolver recognizes the target, the
  * pass retargets the specifier to the correct output chunk.
@@ -60,6 +61,26 @@ import javax.annotation.Nullable;
  * <pre>
  *   imprt_('./output-chunk0.js').then(function() { return module$output$chunk0; });
  * </pre>
+ *
+ * <p>Unlike other "rewrite" passes for which the DefaultPassConfig checks the output language level
+ * using {@code options.needsTranspilationOf(feature)} before adding a pass, it does not check the
+ * language level before adding this particular pass. Even when supported by the output level, we
+ * still invoke this pass if {@code options.shouldAllowDynamicImport()} is set. The only difference
+ * is that for {@code ES2020}, the dynamic imports syntax can pass through if aliasing is not
+ * requested, while for {@code < ES2020} they must get rewritten using the alias call.
+ *
+ * <pre>
+ * <p>{@code
+ * options.shouldAllowDynamicImport() === false?
+ *     ForbidDynamicImportUsage :
+ *     (output >= ES2020) ?
+ *         don't *really* rewrite it unless aliasing is requested :
+ *         rewrite it using the alias call
+ * }
+ * </pre>
+ *
+ * <p>TODO: b/291319705 For the above reason, the pass should be better named as
+ * MaybeRewriteDynamicImports.
  */
 public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallback
     implements CompilerPass {
@@ -67,7 +88,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
   static final DiagnosticType DYNAMIC_IMPORT_ALIASING_REQUIRED =
       DiagnosticType.warning(
           "JSC_DYNAMIC_IMPORT_ALIASING_REQUIRED",
-          "Dynamic import expressions should be aliased for for language level. "
+          "Dynamic import expressions should be aliased for language level. "
               + "Use the --dynamic_import_alias flag.");
 
   static final DiagnosticType DYNAMIC_IMPORT_INVALID_ALIAS =
@@ -80,7 +101,6 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
   private final boolean requiresAliasing;
   private final boolean shouldWrapDynamicImportCallbacks;
   private boolean dynamicImportsRemoved = false;
-  private boolean arrowFunctionsAdded = false;
   private boolean wrappedDynamicImportCallback = false;
 
   /** @param compiler The compiler */
@@ -97,7 +117,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
   private final boolean aliasIsValid() {
     return alias != null
         && (alias.equals("import")
-            || NodeUtil.isValidQualifiedName(compiler.getFeatureSet(), alias));
+            || NodeUtil.isValidQualifiedName(compiler.getAllowableFeatures(), alias));
   }
 
   @Override
@@ -110,15 +130,20 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
     if (wrappedDynamicImportCallback) {
       injectWrappingFunctionExtern();
     }
+
     if (dynamicImportsRemoved) {
+      compiler.markFeatureNotAllowed(Feature.DYNAMIC_IMPORT);
+
       // This pass removes dynamic import, but adds arrow functions.
-      compiler.setFeatureSet(compiler.getFeatureSet().without(Feature.DYNAMIC_IMPORT));
+      // It is unusual to call this NodeUtil method instead of the TranspilationPasses one. This
+      // pass runs as a stage1 checks pass and does not have access to {@code TranspilationPasses}.
+      // Adding that dep produces a cycle in the BUILD dep graph.
+      // Regular transpiler passes must use the {@code
+      // TranspilationPassses.maybeMarkFeaturesAsTranspiledAway}.
+      NodeUtil.removeFeatureFromAllScripts(root, Feature.DYNAMIC_IMPORT, compiler);
       if (this.requiresAliasing && aliasIsValid()) {
         NodeTraversal.traverse(compiler, externs, new AliasInjectingTraversal());
       }
-    }
-    if (arrowFunctionsAdded) {
-      compiler.setFeatureSet(compiler.getFeatureSet().with(Feature.ARROW_FUNCTIONS));
     }
   }
 
@@ -161,7 +186,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
           // the import to reference the rewritten global module namespace variable.
           retargetImportSpecifier(t, n, targetModule);
           if (NodeUtil.isExpressionResultUsed(n)) {
-            addChainedThen(n, targetModuleNS);
+            addChainedThen(t, n, targetModuleNS);
           }
         }
       }
@@ -195,7 +220,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
     final JSTypeRegistry registry = compiler.getTypeRegistry();
     final Node promiseDotResolve =
         astFactory.createQName(compiler.getTranspilationNamespace(), "Promise.resolve");
-    final Node promiseResolveCall = astFactory.createCall(promiseDotResolve);
+    final Node promiseResolveCall = astFactory.createCall(promiseDotResolve, type(dynamicImport));
     final boolean isExpressionUsed = NodeUtil.isExpressionResultUsed(dynamicImport);
     if (isExpressionUsed) {
       JSType moduleNamespaceType;
@@ -288,7 +313,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
    *   import('./foo.js').then(() => module$foo);
    * </pre>
    */
-  private void addChainedThen(Node dynamicImport, Var targetModuleNs) {
+  private void addChainedThen(NodeTraversal t, Node dynamicImport, Var targetModuleNs) {
     JSTypeRegistry registry = compiler.getTypeRegistry();
     final Node importParent = dynamicImport.getParent();
     final Node placeholder = IR.empty();
@@ -306,20 +331,23 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
       Node wrappingFunction =
           astFactory.createName(
               DYNAMIC_IMPORT_CALLBACK_FN,
-              registry.createFunctionType(callbackFn.getJSType(), callbackFn.getJSType()));
-      thenArgument = astFactory.createCall(wrappingFunction, callbackFn);
+              type(registry.createFunctionType(callbackFn.getJSType(), callbackFn.getJSType())));
+      thenArgument = astFactory.createCall(wrappingFunction, type(callbackFn), callbackFn);
       wrappedDynamicImportCallback = true;
     }
     final Node importThenCall =
-        astFactory.createCall(astFactory.createGetProp(dynamicImport, "then"), thenArgument);
+        astFactory.createCall(
+            astFactory.createGetPropWithUnknownType(dynamicImport, "then"),
+            type(dynamicImport),
+            thenArgument);
     importThenCall.srcrefTreeIfMissing(dynamicImport);
     if (dynamicImport.getJSType() != null) {
       importThenCall.copyTypeFrom(dynamicImport);
     }
     placeholder.replaceWith(importThenCall);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.ARROW_FUNCTIONS, compiler);
     compiler.reportChangeToChangeScope(callbackFn);
     compiler.reportChangeToEnclosingScope(importParent);
-    arrowFunctionsAdded = true;
   }
 
   /**
@@ -343,7 +371,9 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
     aliasNode.setOriginalName("import");
     final Node moduleSpecifier = dynamicImport.removeFirstChild();
     Node importAliasCall =
-        astFactory.createCall(aliasNode, moduleSpecifier).srcrefTreeIfMissing(dynamicImport);
+        astFactory
+            .createCall(aliasNode, type(dynamicImport), moduleSpecifier)
+            .srcrefTreeIfMissing(dynamicImport);
     if (dynamicImport.getJSType() != null) {
       importAliasCall.copyTypeFrom(dynamicImport);
     }
@@ -369,7 +399,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
             DYNAMIC_IMPORT_CALLBACK_FN,
             astFactory.createParamList("importCallback"),
             astFactory.createBlock(),
-            registry.createFunctionType(templateT, templateT));
+            type(registry.createFunctionType(templateT, templateT)));
 
     Node externsRoot = compiler.getSynthesizedExternsInput().getAstRoot(compiler);
     wrappingFunctionDefinition.srcrefTree(externsRoot);
@@ -411,7 +441,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
                 alias,
                 astFactory.createParamList("specifier"),
                 astFactory.createBlock(),
-                registry.createFunctionType(promiseTemplatizedType, stringType));
+                type(registry.createFunctionType(promiseTemplatizedType, stringType)));
         aliasNode.srcrefTree(externsRoot);
         externsRoot.addChildToBack(aliasNode);
       } else {
@@ -434,7 +464,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
         Node qName = aliasRootNode.getFirstChild().cloneNode();
         aliasNameParts.next(); // skip over root name
         while (aliasNameParts.hasNext()) {
-          qName = astFactory.createGetProp(qName.cloneTree(), aliasNameParts.next());
+          qName = astFactory.createGetPropWithUnknownType(qName.cloneTree(), aliasNameParts.next());
           Node assignedValue;
           if (!aliasNameParts.hasNext()) {
             assignedValue =
@@ -442,7 +472,7 @@ public class RewriteDynamicImports extends NodeTraversal.AbstractPostOrderCallba
                     "",
                     astFactory.createParamList("specifier"),
                     astFactory.createBlock(),
-                    registry.createFunctionType(promiseTemplatizedType, stringType));
+                    type(registry.createFunctionType(promiseTemplatizedType, stringType)));
           } else {
             assignedValue = astFactory.createObjectLit();
           }

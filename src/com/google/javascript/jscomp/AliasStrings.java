@@ -16,12 +16,14 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.min;
 
+import com.google.javascript.jscomp.CompilerOptions.AliasStringsMode;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -31,30 +33,25 @@ import java.util.TreeMap;
 import java.util.logging.Logger;
 
 /**
- * A compiler pass for aliasing strings. String declarations
- * contribute to garbage collection, which becomes a problem in large
- * applications. Strings that should be aliased occur many times in the code,
- * or occur on codepaths that get executed frequently.
+ * A compiler pass for aliasing strings. String declarations contribute to garbage collection, which
+ * becomes a problem in large applications. Strings that should be aliased occur many times in the
+ * code, or occur on codepaths that get executed frequently.
  *
- * 2017/09/17 Notes:
- *     - Turning on this pass usually hurts code size after gzip.
- *     - It was originally written to deal with performance problems on some
- *       older browser VMs.
- *     - However, projects that make heavy use of jslayout may need to enable
- *       this pass even for modern browsers, because jslayout generates so many
- *       duplicate strings.
+ * <p>2017/09/17 Notes: - Turning on this pass usually hurts code size after gzip. - It was
+ * originally written to deal with performance problems on some older browser VMs. - However,
+ * projects that make heavy use of jslayout may need to enable this pass even for modern browsers,
+ * because jslayout generates so many duplicate strings.
  */
 class AliasStrings implements CompilerPass, NodeTraversal.Callback {
 
-  private static final Logger logger =
-      Logger.getLogger(AliasStrings.class.getName());
+  private static final Logger logger = Logger.getLogger(AliasStrings.class.getName());
 
   /** Prefix for variable names for the aliased strings */
   private static final String STRING_ALIAS_PREFIX = "$$S_";
 
   private final AbstractCompiler compiler;
 
-  private final JSChunkGraph moduleGraph;
+  private final JSChunkGraph chunkGraph;
 
   private final boolean outputStringUsage;
 
@@ -62,28 +59,42 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
 
   private final Set<String> usedHashedAliases = new LinkedHashSet<>();
 
-  /**
-   * Map from module to the node in that module that should parent any string variable declarations
-   * that have to be moved into that module
-   */
-  private final Map<JSChunk, Node> moduleVarParentMap = new HashMap<>();
+  private final AliasStringsMode aliasStringsMode;
 
-  /** package private.  This value is AND-ed with the hash function to allow
-   * unit tests to reduce the range of hash values to test collision cases */
+  /** Alias strings longer than 100 characters if aliasStringsMode=AliasStringsMode.LARGE */
+  private static final int ALIAS_LARGE_STRINGS_LENGTH = 100;
+
+  /**
+   * Map from chunk to the node in that chunk that should parent any string variable declarations
+   * that have to be moved into that chunk
+   */
+  private final Map<JSChunk, Node> chunkVarParentMap = new LinkedHashMap<>();
+
+  /**
+   * package private. This value is AND-ed with the hash function to allow unit tests to reduce the
+   * range of hash values to test collision cases
+   */
   int unitTestHashReductionMask = ~0;
 
   /**
    * Creates an instance.
    *
    * @param compiler The compiler
-   * @param moduleGraph The module graph, or null if there are no modules
+   * @param chunkGraph The module graph, or null if there are no modules
    * @param outputStringUsage Outputs all strings and the number of times they were used in the
    *     application to the server log.
+   * @param aliasStringsMode The alias strings policy set to either ALL or LARGE
    */
-  AliasStrings(AbstractCompiler compiler, JSChunkGraph moduleGraph, boolean outputStringUsage) {
+  AliasStrings(
+      AbstractCompiler compiler,
+      JSChunkGraph chunkGraph,
+      boolean outputStringUsage,
+      AliasStringsMode aliasStringsMode) {
     this.compiler = compiler;
-    this.moduleGraph = moduleGraph;
+    this.chunkGraph = chunkGraph;
     this.outputStringUsage = outputStringUsage;
+    checkState(aliasStringsMode != AliasStringsMode.NONE);
+    this.aliasStringsMode = aliasStringsMode;
   }
 
   @Override
@@ -132,40 +143,38 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
         return;
       }
 
+      if (aliasStringsMode == AliasStringsMode.LARGE
+          && str.length() <= ALIAS_LARGE_STRINGS_LENGTH) {
+        return;
+      }
+
       Node occurrence = n;
       StringInfo info = getOrCreateStringInfo(str);
 
       info.occurrences.add(occurrence);
 
-      // The current module.
-      JSChunk module = t.getChunk();
+      // The current chunk.
+      JSChunk chunk = t.getChunk();
       if (info.occurrences.size() != 1) {
         // Check whether the current module depends on the module containing
         // the declaration.
-        if (module != null
-            && info.moduleToContainDecl != null
-            && module != info.moduleToContainDecl) {
+        if (chunk != null && info.chunkToContainDecl != null && chunk != info.chunkToContainDecl) {
           // We need to declare this string in the deepest module in the
           // module dependency graph that both of these modules depend on.
-          module =
-              moduleGraph.getDeepestCommonDependencyInclusive(module, info.moduleToContainDecl);
+          chunk = chunkGraph.getDeepestCommonDependencyInclusive(chunk, info.chunkToContainDecl);
         } else {
           // use the previously saved insertion location.
           return;
         }
       }
-      Node varParent =
-          moduleVarParentMap.computeIfAbsent(module, compiler::getNodeForCodeInsertion);
-      info.moduleToContainDecl = module;
+      Node varParent = chunkVarParentMap.computeIfAbsent(chunk, compiler::getNodeForCodeInsertion);
+      info.chunkToContainDecl = chunk;
       info.parentForNewVarDecl = varParent;
       info.siblingToInsertVarDeclBefore = varParent.getFirstChild();
     }
   }
 
-  /**
-   * Looks up the {@link StringInfo} object for a JavaScript string. Creates
-   * it if necessary.
-   */
+  /** Looks up the {@link StringInfo} object for a JavaScript string. Creates it if necessary. */
   private StringInfo getOrCreateStringInfo(String string) {
     StringInfo info = stringInfoMap.get(string);
     if (info == null) {
@@ -175,9 +184,7 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
     return info;
   }
 
- /**
-   * Replace strings with references to alias variables.
-   */
+  /** Replace strings with references to alias variables. */
   private void replaceStringsWithAliases() {
     for (Entry<String, StringInfo> entry : stringInfoMap.entrySet()) {
       String literal = entry.getKey();
@@ -191,8 +198,8 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
   }
 
   /**
-   * Creates a var declaration for each aliased string. Var declarations are
-   * inserted as close to the first use of the string as possible.
+   * Creates a var declaration for each aliased string. Var declarations are inserted as close to
+   * the first use of the string as possible.
    */
   private void addAliasDeclarationNodes() {
     for (Entry<String, StringInfo> entry : stringInfoMap.entrySet()) {
@@ -214,12 +221,17 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
   }
 
   /**
-   *  Dictates the policy for replacing a string with an alias.
+   * Dictates the policy for replacing a string with an alias.
    *
-   *  @param str The string literal
-   *  @param info Accumulated information about a string
+   * @param str The string literal
+   * @param info Accumulated information about a string
    */
-  private static boolean shouldReplaceWithAlias(String str, StringInfo info) {
+  private boolean shouldReplaceWithAlias(String str, StringInfo info) {
+    // Always alias strings if the mode is ALL_AGGRESSIVE.
+    if (aliasStringsMode == AliasStringsMode.ALL_AGGRESSIVE) {
+      return true;
+    }
+
     // Optimize for code size.  Are aliases smaller than strings?
     //
     // This logic optimizes for the size of uncompressed code, but it tends to
@@ -253,9 +265,7 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
     compiler.reportChangeToEnclosingScope(nameNode);
   }
 
-  /**
-   * Outputs a log of all strings used more than once in the code.
-   */
+  /** Outputs a log of all strings used more than once in the code. */
   private void outputStringUsage() {
     StringBuilder sb = new StringBuilder("Strings used more than once:\n");
     for (Entry<String, StringInfo> stringInfoEntry : stringInfoMap.entrySet()) {
@@ -274,18 +284,15 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
 
   // -------------------------------------------------------------------------
 
-  /**
-   * A class that holds information about a JavaScript string that might become
-   * aliased.
-   */
+  /** A class that holds information about a JavaScript string that might become aliased. */
   private final class StringInfo {
     final int id;
 
-    boolean isAliased;      // set to 'true' when reference to alias created
+    boolean isAliased; // set to 'true' when reference to alias created
 
     final ArrayList<Node> occurrences = new ArrayList<>();
 
-    JSChunk moduleToContainDecl;
+    JSChunk chunkToContainDecl;
     Node parentForNewVarDecl;
     Node siblingToInsertVarDeclBefore;
 
@@ -299,8 +306,7 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
     /** Returns the JS variable name to be substituted for this string. */
     String getVariableName(String stringLiteral) {
       if (aliasName == null) {
-        aliasName =
-            encodeStringAsIdentifier(STRING_ALIAS_PREFIX, stringLiteral);
+        aliasName = encodeStringAsIdentifier(STRING_ALIAS_PREFIX, stringLiteral);
       }
       return aliasName;
     }
@@ -308,21 +314,19 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
     /**
      * Returns a legal identifier that uniquely characterizes string 's'.
      *
-     * We want the identifier to be a function of the string value because that
-     * makes the identifiers stable as the program is changed.
+     * <p>We want the identifier to be a function of the string value because that makes the
+     * identifiers stable as the program is changed.
      *
-     * The digits of a good hash function would be adequate, but for short
-     * strings the following algorithm is easier to work with for unit tests.
+     * <p>The digits of a good hash function would be adequate, but for short strings the following
+     * algorithm is easier to work with for unit tests.
      *
-     * ASCII alphanumerics are mapped to themselves.  Other characters are
-     * mapped to $XXX or $XXX_ where XXX is a variable number of hex digits.
-     * The underscore is inserted as necessary to avoid ambiguity when the
-     * character following is a hex digit. E.g. '\n1' maps to '$a_1',
+     * <p>ASCII alphanumerics are mapped to themselves. Other characters are mapped to $XXX or $XXX_
+     * where XXX is a variable number of hex digits. The underscore is inserted as necessary to
+     * avoid ambiguity when the character following is a hex digit. E.g. '\n1' maps to '$a_1',
      * distinguished by the underscore from '\u00A1' which maps to '$a1'.
      *
-     * If the string is short enough, this is sufficient.  Longer strings are
-     * truncated after encoding an initial prefix and appended with a hash
-     * value.
+     * <p>If the string is short enough, this is sufficient. Longer strings are truncated after
+     * encoding an initial prefix and appended with a hash value.
      */
     String encodeStringAsIdentifier(String prefix, String s) {
       // Limit to avoid generating very long identifiers
@@ -338,16 +342,14 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
         char ch = s.charAt(i);
 
         if (protectHex) {
-          if ((ch >= '0' && ch <= '9') ||
-              (ch >= 'a' && ch <= 'f')) { // toHexString generate lowercase
+          if ((ch >= '0' && ch <= '9')
+              || (ch >= 'a' && ch <= 'f')) { // toHexString generate lowercase
             sb.append('_');
           }
           protectHex = false;
         }
 
-        if ((ch >= '0' && ch <= '9') ||
-            (ch >= 'A' && ch <= 'Z') ||
-            (ch >= 'a' && ch <= 'z')) {
+        if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
           sb.append(ch);
         } else {
           sb.append('$');

@@ -106,7 +106,6 @@ public class PolymerPassSuppressBehaviorsTest extends CompilerTestCase {
             "    },",
             "  },",
             "};"),
-
         lines(
             "/** @polymerBehavior @nocollapse */",
             "var FunBehavior = {",
@@ -146,7 +145,6 @@ public class PolymerPassSuppressBehaviorsTest extends CompilerTestCase {
             "    },",
             "  },",
             "};"),
-
         lines(
             "/** @polymerBehavior @nocollapse */",
             "var FunBehavior = {",
@@ -174,15 +172,8 @@ public class PolymerPassSuppressBehaviorsTest extends CompilerTestCase {
     disableTypeCheck();
 
     test(
-        lines(
-            "/** @polymerBehavior */",
-            "const FunBehavior = {",
-            "};"),
-
-        lines(
-            "/** @polymerBehavior @nocollapse */",
-            "const FunBehavior = {",
-            "};"));
+        lines("/** @polymerBehavior */", "const FunBehavior = {", "};"),
+        lines("/** @polymerBehavior @nocollapse */", "const FunBehavior = {", "};"));
   }
 
   @Test
@@ -190,15 +181,8 @@ public class PolymerPassSuppressBehaviorsTest extends CompilerTestCase {
     disableTypeCheck();
 
     test(
-        lines(
-            "/** @polymerBehavior */",
-            "let FunBehavior = {",
-            "};"),
-
-        lines(
-            "/** @polymerBehavior @nocollapse */",
-            "let FunBehavior = {",
-            "};"));
+        lines("/** @polymerBehavior */", "let FunBehavior = {", "};"),
+        lines("/** @polymerBehavior @nocollapse */", "let FunBehavior = {", "};"));
   }
 
   @Test

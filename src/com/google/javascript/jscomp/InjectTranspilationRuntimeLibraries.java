@@ -40,11 +40,13 @@ public final class InjectTranspilationRuntimeLibraries extends AbstractPostOrder
     implements CompilerPass {
   private final AbstractCompiler compiler;
   private final boolean getterSetterSupported;
+  private boolean injectedClassExtendsLibraries;
 
   public InjectTranspilationRuntimeLibraries(AbstractCompiler compiler) {
     this.compiler = compiler;
     this.getterSetterSupported =
         !FeatureSet.ES3.contains(compiler.getOptions().getOutputFeatureSet());
+    this.injectedClassExtendsLibraries = false;
   }
 
   @Override
@@ -56,7 +58,7 @@ public final class InjectTranspilationRuntimeLibraries extends AbstractPostOrder
 
     FeatureSet outputFeatures = compiler.getOptions().getOutputFeatureSet();
 
-    // Check for references to global `Symbol` and getters/setters
+    // Check for references to global `Symbol`, getters/setters, and class `extends` clauses
     if (!outputFeatures.contains(used)) {
       NodeTraversal.traverse(compiler, root, this);
     }
@@ -67,32 +69,36 @@ public final class InjectTranspilationRuntimeLibraries extends AbstractPostOrder
     // functions to be have JSType applied to it by the type inferrence.
 
     if (mustBeCompiledAway.contains(Feature.TEMPLATE_LITERALS)) {
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "createtemplatetagfirstarg");
+      TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "createtemplatetagfirstarg");
     }
 
-    if (mustBeCompiledAway.contains(Feature.FOR_OF)) {
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "makeIterator");
-    }
-
-    if (mustBeCompiledAway.contains(Feature.ARRAY_DESTRUCTURING)) {
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "makeIterator");
+    if (mustBeCompiledAway.contains(Feature.FOR_OF)
+        || mustBeCompiledAway.contains(Feature.ARRAY_DESTRUCTURING)
+        || mustBeCompiledAway.contains(Feature.OBJECT_PATTERN_REST)) {
+      // `makeIterator` isn't needed directly for `OBJECT_PATTERN_REST`, but when we transpile
+      // a destructuring case that contains it, we transpile the entire destructured assignment,
+      // which may also include `ARRAY_DESTRUCTURING`.
+      TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "makeIterator");
     }
 
     if (mustBeCompiledAway.contains(Feature.ARRAY_PATTERN_REST)) {
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "arrayFromIterator");
+      TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "arrayFromIterator");
     }
 
-    if (mustBeCompiledAway.contains(Feature.SPREAD_EXPRESSIONS)
-        || mustBeCompiledAway.contains(Feature.CLASS_EXTENDS)) {
+    if (mustBeCompiledAway.contains(Feature.SPREAD_EXPRESSIONS)) {
       // We must automatically generate the default constructor for descendent classes,
       // and those must call super(...arguments), so we end up injecting our own spread
       // expressions for such cases.
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "arrayFromIterable");
+      TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "arrayFromIterable");
     }
 
-    if (mustBeCompiledAway.contains(Feature.CLASS_EXTENDS)) {
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "construct");
-      Es6ToEs3Util.preloadEs6RuntimeFunction(compiler, "inherits");
+    if ((mustBeCompiledAway.contains(Feature.OBJECT_LITERALS_WITH_SPREAD)
+            || mustBeCompiledAway.contains(Feature.OBJECT_PATTERN_REST))
+        && !outputFeatures.contains(FeatureSet.ES2015)) {
+      // We need `Object.assign` to transpile `obj = {a, ...rest};` or `const {a, ...rest} = obj;`,
+      // but the output language level doesn't indicate that it is guaranteed to be present, so
+      // we'll include our polyfill.
+      compiler.ensureLibraryInjected("es6/object/assign", /* force= */ false);
     }
 
     if (mustBeCompiledAway.contains(Feature.CLASS_GETTER_SETTER)) {
@@ -114,6 +120,20 @@ public final class InjectTranspilationRuntimeLibraries extends AbstractPostOrder
     if (mustBeCompiledAway.contains(Feature.FOR_AWAIT_OF)) {
       compiler.ensureLibraryInjected("es6/util/makeasynciterator", /* force= */ false);
     }
+
+    if (mustBeCompiledAway.contains(Feature.REST_PARAMETERS)) {
+      compiler.ensureLibraryInjected("es6/util/restarguments", /* force= */ false);
+    }
+
+    if (compiler.getOptions().getInstrumentAsyncContext()
+        // NOTE: async functions only matter for output features, since we don't bother
+        // instrumenting them if they're being transpiled away.  Generators are relevant
+        // regardless of whether they're transpiled or not.
+        && (outputFeatures.contains(Feature.ASYNC_FUNCTIONS)
+            || used.contains(Feature.GENERATORS)
+            || used.contains(Feature.ASYNC_GENERATORS))) {
+      compiler.ensureLibraryInjected("es6/asynccontext/runtime", /* force= */ false);
+    }
   }
 
   private static FeatureSet getScriptFeatures(Node script) {
@@ -130,12 +150,28 @@ public final class InjectTranspilationRuntimeLibraries extends AbstractPostOrder
         }
         break;
 
-      // TODO(johnlenz): this check doesn't belong here.
+        // TODO(johnlenz): this check doesn't belong here.
       case GETTER_DEF:
       case SETTER_DEF:
         if (!getterSetterSupported) {
-          Es6ToEs3Util.cannotConvert(
+          TranspilationUtil.cannotConvert(
               compiler, n, "ES5 getters/setters (consider using --language_out=ES5)");
+        }
+        break;
+
+      case CLASS:
+        // This is technically an optimization - we could just always inject these when we see
+        // Feature.CLASSES. That's fine for real code, but just makes some unit testing
+        // harder because more runtime libraries are injected.
+        Node superclass = n.getSecondChild();
+        if (!injectedClassExtendsLibraries && !superclass.isEmpty()) {
+          TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "construct");
+          TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "inherits");
+          // We must automatically generate the default constructor for descendent classes,
+          // and those must call super(...arguments), so we end up injecting our own spread
+          // expressions for such cases.
+          TranspilationUtil.preloadTranspilationRuntimeFunction(compiler, "arrayFromIterable");
+          injectedClassExtendsLibraries = true;
         }
         break;
       default:

@@ -16,26 +16,22 @@
 
 package com.google.javascript.jscomp.bundle;
 
-import static java.util.Arrays.asList;
 
 import com.google.auto.value.AutoValue;
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.errorprone.annotations.Immutable;
 import com.google.javascript.jscomp.deps.DependencyInfo;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.function.Function;
-import javax.annotation.CheckReturnValue;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** An abstract representation of a source file. */
 @AutoValue
-@GwtIncompatible
 @Immutable
 public abstract class Source {
 
@@ -85,19 +81,17 @@ public abstract class Source {
         .setEstimatedSize(0);
   }
 
-  private static final Path DEV_NULL = Paths.get("/dev/null");
+  private static final Path DEV_NULL = Path.of("/dev/null");
 
   // Internal-only properties: the code suppliers are necessary for lazy bundling,
   // but we cannot use an ordinary supplier since we need guarantees about equals and
   // hash code.  Thus, we use an internal-only Supplier subtype.
   abstract Lazy<String> codeSupplier();
 
-  @Nullable
-  abstract Lazy<String> originalCodeSupplier();
+  abstract @Nullable Lazy<String> originalCodeSupplier();
 
   /** Builder for Source instances. */
   @AutoValue.Builder
-  @GwtIncompatible
   public abstract static class Builder {
     public abstract Builder setPath(Path path);
     public abstract Builder setSourceMap(String sourceMap);
@@ -120,8 +114,7 @@ public abstract class Source {
     }
 
     public final Builder addRuntime(String... runtimes) {
-      return setRuntimes(
-          ImmutableSet.<String>builder().addAll(runtimes()).addAll(asList(runtimes)).build());
+      return setRuntimes(ImmutableSet.<String>builder().addAll(runtimes()).add(runtimes).build());
     }
 
     public final Builder setDependencyInfo(DependencyInfo info) {
@@ -143,8 +136,7 @@ public abstract class Source {
     abstract Lazy<String> codeSupplier();
     abstract Source autoBuild();
 
-    @Nullable
-    abstract Lazy<String> originalCodeSupplier();
+    abstract @Nullable Lazy<String> originalCodeSupplier();
   }
 
   /** An automorphic transformation on sources. */
@@ -184,7 +176,6 @@ public abstract class Source {
   }
 
   /** Essentially the same as Supplier, but wraps equals and hashCode. */
-  @GwtIncompatible
   @Immutable
   abstract static class Lazy<T> implements Supplier<T> {
 
@@ -199,6 +190,7 @@ public abstract class Source {
     }
 
     /** Returns a Lazy that always returns the same instance. */
+    @SuppressWarnings("Immutable") // T is not known to be immutable.
     static <T> Lazy<T> ofInstance(T instance) {
       return new Lazy<T>() {
         @Override
@@ -209,6 +201,7 @@ public abstract class Source {
     }
 
     /** Returns a Lazy from a memoized supplier. */
+    @SuppressWarnings("Immutable") // Supplier is not intrinsically immutable.
     static <T> Lazy<T> memoize(Supplier<T> supplier) {
       Supplier<T> memoized = Suppliers.memoize(supplier);
       return new Lazy<T>() {

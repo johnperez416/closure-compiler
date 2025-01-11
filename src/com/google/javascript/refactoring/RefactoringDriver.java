@@ -35,6 +35,7 @@ import com.google.javascript.jscomp.parsing.Config;
 import com.google.javascript.rhino.Node;
 import java.util.List;
 import java.util.regex.Pattern;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Primary driver of a refactoring. This class collects the inputs, runs the refactoring over
@@ -54,7 +55,7 @@ public final class RefactoringDriver {
   }
 
   /** Run a refactoring and return any suggested fixes as a result. */
-  public List<SuggestedFix> drive(Scanner scanner, Pattern includeFilePattern) {
+  public List<SuggestedFix> drive(Scanner scanner, @Nullable Pattern includeFilePattern) {
     JsFlumeCallback callback = new JsFlumeCallback(scanner, includeFilePattern);
     NodeTraversal.traverse(compiler, rootNode, callback);
     List<SuggestedFix> fixes = callback.getFixes();
@@ -96,7 +97,6 @@ public final class RefactoringDriver {
     options.setCheckSuspiciousCode(true);
     options.setCheckSymbols(true);
     options.setCheckTypes(true);
-    options.setBrokenClosureRequiresLevel(CheckLevel.OFF);
     // TODO(bangert): Remove this -- we want to rewrite code before closure syntax is removed.
     // Unfortunately, setClosurePass is required, or code doesn't type check.
     options.setClosurePass(true);
@@ -110,7 +110,7 @@ public final class RefactoringDriver {
 
   public static class Builder {
     private static final Function<String, SourceFile> TO_SOURCE_FILE_FN =
-        file -> SourceFile.builder().buildFromFile(file);
+        file -> SourceFile.builder().withPath(file).build();
 
     private final ImmutableList.Builder<SourceFile> inputs = ImmutableList.builder();
     private final ImmutableList.Builder<SourceFile> externs = ImmutableList.builder();

@@ -445,6 +445,31 @@ HTMLElement.prototype.className;
 HTMLElement.prototype.click = function() {};
 
 /**
+ * @type {string|null}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/popover
+ */
+HTMLElement.prototype.popover;
+
+/**
+ * @return {undefined}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/hidePopover
+ */
+HTMLElement.prototype.hidePopover = function() {};
+
+/**
+ * @return {undefined}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/showPopover
+ */
+HTMLElement.prototype.showPopover = function() {};
+
+/**
+ * @param {boolean=} force
+ * @return {boolean}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/togglePopover
+ */
+HTMLElement.prototype.togglePopover = function(force) {};
+
+/**
  * @type {number}
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-40676705
  */
@@ -1710,6 +1735,13 @@ HTMLAnchorElement.prototype.blur = function() {};
 HTMLAnchorElement.prototype.focus = function() {};
 
 /**
+ * @type {string}
+ * @implicitCast
+ * @see https://wicg.github.io/attribution-reporting-api/#idl-index
+ */
+HTMLAnchorElement.prototype.attributionSrc;
+
+/**
  * @constructor
  * @extends {HTMLElement}
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-17701901
@@ -1794,6 +1826,13 @@ HTMLImageElement.prototype.vspace;
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-13839076
  */
 HTMLImageElement.prototype.width;
+
+/**
+ * @type {string}
+ * @implicitCast
+ * @see https://wicg.github.io/attribution-reporting-api/#idl-index
+ */
+HTMLImageElement.prototype.attributionSrc;
 
 /**
  * @constructor
@@ -2156,6 +2195,13 @@ HTMLScriptElement.prototype.text;
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-30534818
  */
 HTMLScriptElement.prototype.type;
+
+/**
+ * @type {string}
+ * @implicitCast
+ * @see https://wicg.github.io/attribution-reporting-api/#idl-index
+ */
+HTMLScriptElement.prototype.attributionSrc;
 
 /**
  * @constructor
@@ -2964,7 +3010,7 @@ Window.prototype.stop = function() {};
 var BoolOrAttributionSourceParams;
 
 /**
- * @param {*=} url
+ * @param {!URL|string=} url
  * @param {string=} windowName
  * @param {string=} windowFeatures
  * @param {!BoolOrAttributionSourceParams=} replaceOrAttributionParams

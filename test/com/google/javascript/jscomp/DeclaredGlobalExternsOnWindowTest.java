@@ -40,168 +40,180 @@ public final class DeclaredGlobalExternsOnWindowTest extends CompilerTestCase {
 
   @Test
   public void testWindowProperty1a() {
-    testExternChanges("var window; var a;", "", "var window;var a;window.a");
+    testExternChanges(
+        externs("var window; var a;"), srcs(""), expected("var window;var a;window.a"));
   }
 
   // No "var window;" so use "this" instead.
   @Test
   public void testWindowProperty1b() {
-    testExternChanges("var a;", "", "var a;this.a");
+    testExternChanges(externs("var a;"), srcs(""), expected("var a;this.a"));
   }
 
   @Test
   public void testWindowProperty2() {
-    testExternChanges("", "var a", "");
+    testExternChanges(externs(""), srcs("var a"), expected(""));
   }
 
   @Test
   public void testWindowProperty3a() {
-    testExternChanges("var window; function f() {}", "var b",
-        "var window;function f(){}window.f;");
+    testExternChanges(
+        externs("var window; function f() {}"),
+        srcs("var b"),
+        expected("var window;function f(){}window.f;"));
   }
 
   // No "var window;" so use "this" instead.
   @Test
   public void testWindowProperty3b() {
-    testExternChanges("function f() {}", "var b", "function f(){}this.f");
+    testExternChanges(externs("function f() {}"), srcs("var b"), expected("function f(){}this.f"));
   }
 
   @Test
   public void testWindowProperty4() {
-    testExternChanges("", "function f() {}", "");
+    testExternChanges(externs(""), srcs("function f() {}"), expected(""));
   }
 
   @Test
   public void testWindowProperty5a() {
-    testExternChanges("var window; var x = function f() {}", "var b",
-        "var window;var x=function f(){};window.x;");
-    testExternChanges("var window; var x = function () {}", "var b",
-        "var window;var x=function(){};window.x;");
+    testExternChanges(
+        externs("var window; var x = function f() {}"),
+        srcs("var b"),
+        expected("var window;var x=function f(){};window.x;"));
+    testExternChanges(
+        externs("var window; var x = function () {}"),
+        srcs("var b"),
+        expected("var window;var x=function(){};window.x;"));
   }
 
   // No "var window;" so use "this" instead.
   @Test
   public void testWindowProperty5b() {
-    testExternChanges("var x = function f() {};", "var b", "var x=function f(){};this.x");
+    testExternChanges(
+        externs("var x = function f() {};"),
+        srcs("var b"),
+        expected("var x=function f(){};this.x"));
   }
 
   @Test
   public void testWindowProperty5c() {
     testExternChanges(
-        "var window; var x = ()=>{}",
-        "var b",
-        "var window;var x=()=>{};window.x;");
+        externs("var window; var x = ()=>{}"),
+        srcs("var b"),
+        expected("var window;var x=()=>{};window.x;"));
   }
 
   @Test
   public void testWindowProperty6() {
-    testExternChanges("var window; /** @const {number} */ var n;", "",
-        lines(
-            "var window;",
-            "/** @const {number} */ var n;",
-            "/** @const {number} @suppress {const,duplicate} */ window.n;"));
+    testExternChanges(
+        externs("var window; /** @const {number} */ var n;"),
+        srcs(""),
+        expected(
+            lines(
+                "var window;",
+                "/** @const {number} */ var n;",
+                "/** @const {number} @suppress {const,duplicate} */ window.n;")));
   }
 
   @Test
   public void testWindowProperty7() {
-    testExternChanges("var window; /** @const */ var ns = {}", "",
-        lines(
-            "var window;",
-            "/** @const */ var ns = {};",
-            "/** @suppress {const,duplicate} @const */ window.ns = ns;"));
+    testExternChanges(
+        externs("var window; /** @const */ var ns = {}"),
+        srcs(""),
+        expected(
+            lines(
+                "var window;",
+                "/** @const */ var ns = {};",
+                "/** @suppress {const,duplicate} @const */ window.ns = ns;")));
   }
 
   @Test
   public void testNameAliasing() {
     testExternChanges(
-        lines(
-            "var window;",
-            "/** @const */",
-            "var ns = {};",
-            "/** @const */",
-            "var ns2 = ns;"),
-        "",
-        lines(
-            "var window;",
-            "/** @const */",
-            "var ns = {};",
-            "/** @const */",
-            "var ns2 = ns;",
-            "/** @suppress {const,duplicate} @const */",
-            "window.ns = ns;",
-            "/** @suppress {const,duplicate} @const */",
-            "window.ns2 = ns;"));
+        externs(
+            lines(
+                "var window;", "/** @const */", "var ns = {};", "/** @const */", "var ns2 = ns;")),
+        srcs(""),
+        expected(
+            lines(
+                "var window;",
+                "/** @const */",
+                "var ns = {};",
+                "/** @const */",
+                "var ns2 = ns;",
+                "/** @suppress {const,duplicate} @const */",
+                "window.ns = ns;",
+                "/** @suppress {const,duplicate} @const */",
+                "window.ns2 = ns;")));
   }
 
   @Test
   public void testQualifiedNameAliasing() {
     testExternChanges(
-        lines(
-            "var window;",
-            "/** @const */",
-            "var ns = {};",
-            "/** @type {number} A very important constant */",
-            "ns.THE_NUMBER;",
-            "/** @const */",
-            "var num = ns.THE_NUMBER;"),
-        "",
-        lines(
-            "var window;",
-            "/** @const */",
-            "var ns = {};",
-            "/** @type {number} A very important constant */",
-            "ns.THE_NUMBER;",
-            "/** @const */",
-            "var num = ns.THE_NUMBER;",
-            "/** @suppress {const,duplicate} @const */",
-            "window.ns=ns;",
-            "/** @suppress {const,duplicate} @const */",
-            "window.num = ns.THE_NUMBER;"));
+        externs(
+            lines(
+                "var window;",
+                "/** @const */",
+                "var ns = {};",
+                "/** @type {number} A very important constant */",
+                "ns.THE_NUMBER;",
+                "/** @const */",
+                "var num = ns.THE_NUMBER;")),
+        srcs(""),
+        expected(
+            lines(
+                "var window;",
+                "/** @const */",
+                "var ns = {};",
+                "/** @type {number} A very important constant */",
+                "ns.THE_NUMBER;",
+                "/** @const */",
+                "var num = ns.THE_NUMBER;",
+                "/** @suppress {const,duplicate} @const */",
+                "window.ns=ns;",
+                "/** @suppress {const,duplicate} @const */",
+                "window.num = ns.THE_NUMBER;")));
   }
 
   @Test
   public void testWindowProperty8() {
-    testExternChanges("var window; /** @constructor */ function Foo() {}", "",
-        lines(
-            "var window;",
-            "/** @constructor */ function Foo(){}",
-            "/** @constructor @suppress {const,duplicate} */ window.Foo = Foo;"));
+    testExternChanges(
+        externs("var window; /** @constructor */ function Foo() {}"),
+        srcs(""),
+        expected(
+            lines(
+                "var window;",
+                "/** @constructor */ function Foo(){}",
+                "/** @constructor @suppress {const,duplicate} */ window.Foo = Foo;")));
   }
 
   @Test
   public void testEnumWindowProperty() {
-    testExternChanges("var window; /** @enum {string} */ var Enum = { A: 'str' };", "",
-        lines(
-            "var window;",
-            "/** @enum {string} */ var Enum = { A: 'str' };",
-            "/** @enum {string} @suppress {const,duplicate} */ window.Enum = Enum;"));
+    testExternChanges(
+        externs("var window; /** @enum {string} */ var Enum = { A: 'str' };"),
+        srcs(""),
+        expected(
+            lines(
+                "var window;",
+                "/** @enum {string} */ var Enum = { A: 'str' };",
+                "/** @enum {string} @suppress {const,duplicate} */ window.Enum = Enum;")));
   }
 
   /** Test to make sure the compiler knows the type of "window.x" is the same as that of "x". */
   @Test
   public void testWindowPropertyWithJsDoc() {
     testSame(
-        externs(lines(
-            MINIMAL_EXTERNS,
-            "var window;",
-            "/** @type {string} */ var x;")),
-        srcs(lines(
-            "/** @param {number} n*/",
-            "function f(n) {}",
-            "f(window.x);")),
+        externs(lines(MINIMAL_EXTERNS, "var window;", "/** @type {string} */ var x;")),
+        srcs(lines("/** @param {number} n*/", "function f(n) {}", "f(window.x);")),
         warning(TypeValidator.TYPE_MISMATCH_WARNING));
   }
 
   @Test
   public void testEnum() {
     testSame(
-        externs(lines(
-            MINIMAL_EXTERNS,
-            "/** @enum {string} */ var Enum = {FOO: 'foo', BAR: 'bar'};")),
-        srcs(lines(
-            "/** @param {Enum} e*/",
-            "function f(e) {}",
-            "f(window.Enum.FOO);")));
+        externs(
+            lines(MINIMAL_EXTERNS, "/** @enum {string} */ var Enum = {FOO: 'foo', BAR: 'bar'};")),
+        srcs(lines("/** @param {Enum} e*/", "function f(e) {}", "f(window.Enum.FOO);")));
   }
 
   /**
@@ -211,22 +223,11 @@ public final class DeclaredGlobalExternsOnWindowTest extends CompilerTestCase {
   @Test
   public void testConstructorIsSameType() {
     testSame(
-        externs(lines(
-            MINIMAL_EXTERNS,
-            "var window;",
-            "/** @constructor */ function Foo() {}")),
-        srcs(lines(
-            "/** @param {!window.Foo} f*/",
-            "function bar(f) {}",
-            "bar(new Foo());")));
+        externs(lines(MINIMAL_EXTERNS, "var window;", "/** @constructor */ function Foo() {}")),
+        srcs(lines("/** @param {!window.Foo} f*/", "function bar(f) {}", "bar(new Foo());")));
 
     testSame(
-        externs(lines(
-            MINIMAL_EXTERNS,
-            "/** @constructor */ function Foo() {}")),
-        srcs(lines(
-            "/** @param {!Foo} f*/",
-            "function bar(f) {}",
-            "bar(new window.Foo());")));
+        externs(lines(MINIMAL_EXTERNS, "/** @constructor */ function Foo() {}")),
+        srcs(lines("/** @param {!Foo} f*/", "function bar(f) {}", "bar(new window.Foo());")));
   }
 }

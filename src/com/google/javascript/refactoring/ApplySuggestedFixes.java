@@ -65,7 +65,7 @@ public final class ApplySuggestedFixes {
       filenameToCodeMap.put(filename, Files.asCharSource(new File(filename), UTF_8).read());
     }
 
-    Map<String, String> newCode = applySuggestedFixesToCode(fixes, filenameToCodeMap);
+    ImmutableMap<String, String> newCode = applySuggestedFixesToCode(fixes, filenameToCodeMap);
     for (Map.Entry<String, String> entry : newCode.entrySet()) {
       Files.asCharSink(new File(entry.getKey()), UTF_8).write(entry.getValue());
     }
@@ -131,7 +131,7 @@ public final class ApplySuggestedFixes {
       String newCode = applyCodeReplacements(replacements, filenameToCodeMap.get(filename));
       newCodeMap.put(filename, newCode);
     }
-    return newCodeMap.build();
+    return newCodeMap.buildOrThrow();
   }
 
   /**

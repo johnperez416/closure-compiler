@@ -16,17 +16,13 @@
 
 package com.google.javascript.jscomp;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Unit tests for {#link {@link PeepholeReplaceKnownMethods}
- *
- */
+/** Unit tests for {#link {@link PeepholeReplaceKnownMethods} */
 @RunWith(JUnit4.class)
 public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
 
@@ -71,7 +67,6 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     useTypes = true;
     disableTypeCheck();
     enableNormalize();
-    disableMultistageCompilation(); // this test runs under J2CL
   }
 
   @Override
@@ -82,6 +77,7 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
 
   @Test
   public void testStringIndexOf() {
+    fold("x = 'abcdef'.indexOf('g')", "x = -1");
     fold("x = 'abcdef'.indexOf('b')", "x = 1");
     fold("x = 'abcdefbe'.indexOf('b', 2)", "x = 6");
     fold("x = 'abcdef'.indexOf('bcd')", "x = 1");
@@ -135,12 +131,9 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     fold("x = [].join(',')", "x = \"\"");
     fold("x = ['a'].join(',')", "x = \"a\"");
     fold("x = ['a', 'b', 'c'].join(',')", "x = \"a,b,c\"");
-    fold("x = ['a', foo, 'b', 'c'].join(',')",
-        "x = [\"a\",foo,\"b,c\"].join()");
-    fold("x = [foo, 'a', 'b', 'c'].join(',')",
-        "x = [foo,\"a,b,c\"].join()");
-    fold("x = ['a', 'b', 'c', foo].join(',')",
-        "x = [\"a,b,c\",foo].join()");
+    fold("x = ['a', foo, 'b', 'c'].join(',')", "x = [\"a\",foo,\"b,c\"].join()");
+    fold("x = [foo, 'a', 'b', 'c'].join(',')", "x = [foo,\"a,b,c\"].join()");
+    fold("x = ['a', 'b', 'c', foo].join(',')", "x = [\"a,b,c\",foo].join()");
 
     // Works with numbers
     fold("x = ['a=', 5].join('')", "x = \"a=5\"");
@@ -152,8 +145,9 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     fold("x = ['a', '5'].join(false)", "x = \"afalse5\"");
 
     // Only optimize if it's a size win.
-    fold("x = ['a', '5', 'c'].join('a very very very long chain')",
-         "x = [\"a\",\"5\",\"c\"].join(\"a very very very long chain\")");
+    fold(
+        "x = ['a', '5', 'c'].join('a very very very long chain')",
+        "x = [\"a\",\"5\",\"c\"].join(\"a very very very long chain\")");
 
     // Template strings
     fold("x = [`a`, `b`, `c`].join(``)", "x = 'abc'");
@@ -163,16 +157,20 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     foldSame("x = ['', foo].join('-')");
     foldSame("x = ['', foo, ''].join()");
 
-    fold("x = ['', '', foo, ''].join(',')",
-         "x = [',', foo, ''].join()");
-    fold("x = ['', '', foo, '', ''].join(',')",
-         "x = [',', foo, ','].join()");
+    fold(
+        "x = ['', '', foo, ''].join(',')", //
+        "x = [ ','  , foo, ''].join()");
+    fold(
+        "x = ['', '', foo, '', ''].join(',')", //
+        "x = [ ',',   foo,  ','].join()");
 
-    fold("x = ['', '', foo, '', '', bar].join(',')",
-         "x = [',', foo, ',', bar].join()");
+    fold(
+        "x = ['', '', foo, '', '', bar].join(',')", //
+        "x = [ ',',   foo,  ',',   bar].join()");
 
-    fold("x = [1,2,3].join('abcdef')",
-         "x = '1abcdef2abcdef3'");
+    fold(
+        "x = [1,2,3].join('abcdef')", //
+        "x = '1abcdef2abcdef3'");
 
     fold("x = [1,2].join()", "x = '1,2'");
     fold("x = [null,undefined,''].join(',')", "x = ',,'");
@@ -298,13 +296,13 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     fold("x = 'abcde'.charAt(2)", "x = 'c'");
     fold("x = 'abcde'.charAt(3)", "x = 'd'");
     fold("x = 'abcde'.charAt(4)", "x = 'e'");
-    foldSame("x = 'abcde'.charAt(5)");  // or x = ''
-    foldSame("x = 'abcde'.charAt(-1)");  // or x = ''
+    foldSame("x = 'abcde'.charAt(5)"); // or x = ''
+    foldSame("x = 'abcde'.charAt(-1)"); // or x = ''
     foldSame("x = 'abcde'.charAt(y)");
-    foldSame("x = 'abcde'.charAt()");  // or x = 'a'
-    foldSame("x = 'abcde'.charAt(0, ++z)");  // or (++z, 'a')
-    foldSame("x = 'abcde'.charAt(null)");  // or x = 'a'
-    foldSame("x = 'abcde'.charAt(true)");  // or x = 'b'
+    foldSame("x = 'abcde'.charAt()"); // or x = 'a'
+    foldSame("x = 'abcde'.charAt(0, ++z)"); // or (++z, 'a')
+    foldSame("x = 'abcde'.charAt(null)"); // or x = 'a'
+    foldSame("x = 'abcde'.charAt(true)"); // or x = 'b'
     fold("x = '\\ud834\udd1e'.charAt(0)", "x = '\\ud834'");
     fold("x = '\\ud834\udd1e'.charAt(1)", "x = '\\udd1e'");
 
@@ -320,13 +318,13 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     fold("x = 'abcde'.charCodeAt(2)", "x = 99");
     fold("x = 'abcde'.charCodeAt(3)", "x = 100");
     fold("x = 'abcde'.charCodeAt(4)", "x = 101");
-    foldSame("x = 'abcde'.charCodeAt(5)");  // or x = (0/0)
-    foldSame("x = 'abcde'.charCodeAt(-1)");  // or x = (0/0)
+    foldSame("x = 'abcde'.charCodeAt(5)"); // or x = (0/0)
+    foldSame("x = 'abcde'.charCodeAt(-1)"); // or x = (0/0)
     foldSame("x = 'abcde'.charCodeAt(y)");
-    foldSame("x = 'abcde'.charCodeAt()");  // or x = 97
-    foldSame("x = 'abcde'.charCodeAt(0, ++z)");  // or (++z, 97)
-    foldSame("x = 'abcde'.charCodeAt(null)");  // or x = 97
-    foldSame("x = 'abcde'.charCodeAt(true)");  // or x = 98
+    foldSame("x = 'abcde'.charCodeAt()"); // or x = 97
+    foldSame("x = 'abcde'.charCodeAt(0, ++z)"); // or (++z, 97)
+    foldSame("x = 'abcde'.charCodeAt(null)"); // or x = 97
+    foldSame("x = 'abcde'.charCodeAt(true)"); // or x = 98
     fold("x = '\\ud834\udd1e'.charCodeAt(0)", "x = 55348");
     fold("x = '\\ud834\udd1e'.charCodeAt(1)", "x = 56606");
 
@@ -422,7 +420,7 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     foldSame("`abc`.toUpperCase()");
     foldSame("`a ${bc}`.toUpperCase()");
 
-    /**
+    /*
      * Make sure things aren't totally broken for non-ASCII strings, non-exhaustive.
      *
      * <p>This includes things like:
@@ -454,7 +452,7 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     foldSame("`ABC`.toLowerCase()");
     foldSame("`A ${BC}`.toLowerCase()");
 
-    /**
+    /*
      * Make sure things aren't totally broken for non-ASCII strings, non-exhaustive.
      *
      * <p>This includes things like:
@@ -543,7 +541,6 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
   }
 
   @Test
-  @GwtIncompatible // TODO(b/155511629): Enable this test for J2CL
   public void testFoldMathFunctions_fround_j2cl() {
     foldSame("Math.fround(1.2)");
   }
@@ -616,6 +613,47 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testFoldMathFunctions_pow() {
+    fold("Math.pow(1, 2)", "1");
+    fold("Math.pow(2, 0)", "1");
+    fold("Math.pow(2, 2)", "4");
+    fold("Math.pow(2, 32)", "4294967296");
+    fold("Math.pow(Infinity, 0)", "1");
+    fold("Math.pow(Infinity, 1)", "Infinity");
+    fold("Math.pow('a', 33)", "NaN");
+  }
+
+  @Test
+  public void testFoldNumberFunctions_isSafeInteger() {
+    fold("Number.isSafeInteger(1)", "true");
+    fold("Number.isSafeInteger(1.5)", "false");
+    fold("Number.isSafeInteger(9007199254740991)", "true");
+    fold("Number.isSafeInteger(9007199254740992)", "false");
+    fold("Number.isSafeInteger(-9007199254740991)", "true");
+    fold("Number.isSafeInteger(-9007199254740992)", "false");
+  }
+
+  @Test
+  public void testFoldNumberFunctions_isFinite() {
+    fold("Number.isFinite(1)", "true");
+    fold("Number.isFinite(1.5)", "true");
+    fold("Number.isFinite(NaN)", "false");
+    fold("Number.isFinite(Infinity)", "false");
+    fold("Number.isFinite(-Infinity)", "false");
+    foldSame("Number.isFinite('a')");
+  }
+
+  @Test
+  public void testFoldNumberFunctions_isNaN() {
+    fold("Number.isNaN(1)", "false");
+    fold("Number.isNaN(1.5)", "false");
+    fold("Number.isNaN(NaN)", "true");
+    foldSame("Number.isNaN('a')");
+    // unknown function may have side effects
+    foldSame("Number.isNaN(+(void unknown()))");
+  }
+
+  @Test
   public void testFoldParseNumbers() {
     // Template Strings
     foldSame("x = parseInt(`123`)");
@@ -633,14 +671,16 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     fold("x = parseInt('07', 8)", "x = 7");
     fold("x = parseInt('08')", "x = 8");
     fold("x = parseInt('0')", "x = 0");
+    fold("x = parseInt('-0')", "x = -0");
     fold("x = parseFloat('0')", "x = 0");
     fold("x = parseFloat('1.23')", "x = 1.23");
+    fold("x = parseFloat('-1.23')", "x = -1.23");
     fold("x = parseFloat('1.2300')", "x = 1.23");
     fold("x = parseFloat(' 0.3333')", "x = 0.3333");
     fold("x = parseFloat('0100')", "x = 100");
     fold("x = parseFloat('0100.000')", "x = 100");
 
-    //Mozilla Dev Center test cases
+    // Mozilla Dev Center test cases
     fold("x = parseInt(' 0xF', 16)", "x = 15");
     fold("x = parseInt(' F', 16)", "x = 15");
     fold("x = parseInt('17', 8)", "x = 15");
@@ -648,10 +688,16 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     fold("x = parseInt('1111', 2)", "x = 15");
     fold("x = parseInt('12', 13)", "x = 15");
     fold("x = parseInt(15.99, 10)", "x = 15");
+    fold("x = parseInt(-15.99, 10)", "x = -15");
+    // Java's Integer.parseInt("-15.99", 10) throws an exception, because of the decimal point.
+    foldSame("x = parseInt('-15.99', 10)");
     fold("x = parseFloat('3.14')", "x = 3.14");
     fold("x = parseFloat(3.14)", "x = 3.14");
+    fold("x = parseFloat(-3.14)", "x = -3.14");
+    fold("x = parseFloat('-3.14')", "x = -3.14");
+    fold("x = parseFloat('-0')", "x = -0");
 
-    //Valid calls - unable to fold
+    // Valid calls - unable to fold
     foldSame("x = parseInt('FXX123', 16)");
     foldSame("x = parseInt('15*3', 10)");
     foldSame("x = parseInt('15e2', 10)");
@@ -663,7 +709,7 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
     foldSame("x = parseFloat('0.0314E+2')");
     foldSame("x = parseFloat('3.333333333333333333333333')");
 
-    //Invalid calls
+    // Invalid calls
     foldSame("x = parseInt('0xa', 10)");
     foldSame("x = parseInt('')");
 
@@ -674,9 +720,9 @@ public final class PeepholeReplaceKnownMethodsTest extends CompilerTestCase {
   @Test
   public void testFoldParseOctalNumbers() {
     setAcceptedLanguage(LanguageMode.ECMASCRIPT5);
-    setExpectParseWarningsInThisTest();
 
-    fold("x = parseInt(021, 8)", "x = 15");
+    fold("x = parseInt('021', 8)", "x = 17");
+    fold("x = parseInt('-021', 8)", "x = -17");
   }
 
   @Test

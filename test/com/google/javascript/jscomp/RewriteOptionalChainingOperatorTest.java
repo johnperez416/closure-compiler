@@ -262,7 +262,7 @@ public final class RewriteOptionalChainingOperatorTest {
               lines(
                   "let tmp0;",
                   "let tmp1;",
-                  "while(",
+                  "for(;",
                   "    obj = ",
                   "        (tmp1 = ary) == null",
                   "            ? void 0",
@@ -270,7 +270,7 @@ public final class RewriteOptionalChainingOperatorTest {
                   "                (tmp0 = obj) == null",
                   "                    ? void 0",
                   "                    : tmp0.getNum()",
-                  "            ]) {",
+                  "            ];) {",
                   "}"),
             },
             {
@@ -287,15 +287,67 @@ public final class RewriteOptionalChainingOperatorTest {
                   "                : tmp0.getNum()",
                   "            ]")
             },
+            {
+              "() => {return foo(a?.b)}",
+              lines("() => {let tmp0; return foo((tmp0 = a) == null ? void 0 : tmp0.b);}")
+            },
+            {
+              "() => foo(a?.b)", //
+              lines("() => { let tmp0; return foo((tmp0 = a) == null ? void 0 : tmp0.b);}")
+            },
+            {
+              "(p = a?.b) => p", //
+              lines("let tmp0; (p = (tmp0 = a) == null ? void 0 : tmp0.b) => { return p;}")
+            },
+            {
+              "(p = a?.b?.c) => p", //
+              lines(
+                  "let tmp0;", //
+                  "let tmp1;",
+                  "(p = (tmp0 = a) == null ? void 0 : (tmp1 = tmp0.b) == null ? void 0 : tmp1.c)"
+                      + " =>",
+                  "{ return p;}")
+            },
+            {
+              lines(
+                  "const a = { b: [3] };",
+                  "label: for (const val of a?.b) {",
+                  "  if (val != 3) {",
+                  "    continue label;",
+                  "  }",
+                  "}"),
+              lines(
+                  "const a = {b:[3]};",
+                  "let tmp0;",
+                  "label: for (const val of (tmp0 = a) == null ? void 0 : tmp0.b) {",
+                  "  if (val != 3) {",
+                  "  continue label;",
+                  "  }",
+                  "}")
+            },
+            {
+              lines(
+                  "{", //
+                  "  const x = 1;",
+                  "  label: for (const a of b?.c) {}",
+                  "}"),
+              lines(
+                  "{", //
+                  "  const x = 1;",
+                  "  let tmp0;",
+                  "  label: for (const a of (tmp0 = b) == null ? void 0 : tmp0.c) {}",
+                  "}")
+            }
           });
     }
 
-    @Override
     @Before
-    public void setUp() throws Exception {
-      super.setUp();
+    public void customSetUp() throws Exception {
+      enableNormalize();
       enableTypeCheck();
       enableTypeInfoValidation();
+      replaceTypesWithColors();
+      enableMultistageCompilation();
     }
 
     @Override
@@ -327,6 +379,8 @@ public final class RewriteOptionalChainingOperatorTest {
       super.setUp();
       enableTypeCheck();
       enableTypeInfoValidation();
+      replaceTypesWithColors();
+      enableMultistageCompilation();
     }
 
     @Override

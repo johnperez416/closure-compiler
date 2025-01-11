@@ -38,8 +38,9 @@
 
 package com.google.javascript.rhino;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.rhino.testing.Asserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
@@ -194,6 +195,7 @@ public class HamtPMapTest {
   }
 
   @Test
+  @SuppressWarnings("CheckReturnValue")
   public void testReconcile_rejectsNullResult() {
     PMap<Integer, Integer> left = build(1, 3, 5, 7);
     PMap<Integer, Integer> right = build(2, 4, 6, 8);
@@ -205,6 +207,18 @@ public class HamtPMapTest {
   public void testEquivalent_equivalent() {
     PMap<Integer, Integer> left = build(1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024);
     PMap<Integer, Integer> right = build(2, 512, 32, 8, 1024, 1, 64, 4, 16, 256, 128);
+
+    assertThat(left.equivalent(right, Objects::equals)).isTrue();
+    assertThat(right.equivalent(left, Objects::equals)).isTrue();
+  }
+
+  @Test
+  public void testEquivalent_equivalent_hashCodeCollisions() {
+    int fixedHashCode = 42;
+    PMap<IntegerWithCustomHashCode, Integer> left =
+        buildWithCustomHashCode(fixedHashCode, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024);
+    PMap<IntegerWithCustomHashCode, Integer> right =
+        buildWithCustomHashCode(fixedHashCode, 2, 512, 32, 8, 1024, 1, 64, 4, 16, 256, 128);
 
     assertThat(left.equivalent(right, Objects::equals)).isTrue();
     assertThat(right.equivalent(left, Objects::equals)).isTrue();
@@ -238,6 +252,52 @@ public class HamtPMapTest {
     assertThat(right.equivalent(left1, Objects::equals)).isFalse();
     assertThat(left2.equivalent(right, Objects::equals)).isFalse();
     assertThat(right.equivalent(left2, Objects::equals)).isFalse();
+  }
+
+  @Test
+  public void testEquivalent_oneDifferentKey_withHashCodeCollisions() {
+    int fixedHashCode = 42;
+    PMap<IntegerWithCustomHashCode, Integer> left1 =
+        buildWithCustomHashCode(42)
+            .plus(new IntegerWithCustomHashCode(2, fixedHashCode), 1)
+            .plus(new IntegerWithCustomHashCode(3, fixedHashCode), 3)
+            .plus(new IntegerWithCustomHashCode(5, fixedHashCode), 5)
+            .plus(new IntegerWithCustomHashCode(7, fixedHashCode), 7);
+    PMap<IntegerWithCustomHashCode, Integer> left2 =
+        buildWithCustomHashCode(fixedHashCode, 1, 3, 5)
+            .plus(new IntegerWithCustomHashCode(7, fixedHashCode), 8);
+    PMap<IntegerWithCustomHashCode, Integer> right =
+        buildWithCustomHashCode(fixedHashCode, 1, 3, 5, 7);
+
+    assertThat(left1.equivalent(right, Objects::equals)).isFalse();
+    assertThat(right.equivalent(left1, Objects::equals)).isFalse();
+    assertThat(left2.equivalent(right, Objects::equals)).isFalse();
+    assertThat(right.equivalent(left2, Objects::equals)).isFalse();
+  }
+
+  @Test
+  public void
+      testEquivalent_oneDifferentKey_withHashCodeCollisions_doesNotPassNullToEquivalenceTest() {
+    // Regression test for b/323185572, where HamtPMap would sometimes pass a `null` value to the
+    // 'BiPredicate<V, V> equivalence' parameter of HamtPMap.equivalent. `null` values are an
+    // internal implementation detail of HamtPMap.pivot and not part of the public API.
+    int fixedHashCode = 42;
+    PMap<IntegerWithCustomHashCode, Integer> left1 =
+        buildWithCustomHashCode(42)
+            .plus(new IntegerWithCustomHashCode(2, fixedHashCode), 1)
+            .plus(new IntegerWithCustomHashCode(3, fixedHashCode), 3)
+            .plus(new IntegerWithCustomHashCode(5, fixedHashCode), 5)
+            .plus(new IntegerWithCustomHashCode(7, fixedHashCode), 7);
+    PMap<IntegerWithCustomHashCode, Integer> left2 =
+        buildWithCustomHashCode(fixedHashCode, 1, 3, 5)
+            .plus(new IntegerWithCustomHashCode(7, fixedHashCode), 8);
+    PMap<IntegerWithCustomHashCode, Integer> right =
+        buildWithCustomHashCode(fixedHashCode, 1, 3, 5, 7);
+
+    assertThat(left1.equivalent(right, HamtPMapTest::equalsAndCheckNotNull)).isFalse();
+    assertThat(right.equivalent(left1, HamtPMapTest::equalsAndCheckNotNull)).isFalse();
+    assertThat(left2.equivalent(right, HamtPMapTest::equalsAndCheckNotNull)).isFalse();
+    assertThat(right.equivalent(left2, HamtPMapTest::equalsAndCheckNotNull)).isFalse();
   }
 
   @Test
@@ -367,5 +427,47 @@ public class HamtPMapTest {
       ((HamtPMap<?, ?>) map).assertCorrectStructure();
     }
     return map;
+  }
+
+  private PMap<IntegerWithCustomHashCode, Integer> buildWithCustomHashCode(
+      int fixedHashCode, int... values) {
+    PMap<IntegerWithCustomHashCode, Integer> map =
+        HamtPMap.<IntegerWithCustomHashCode, Integer>empty();
+    for (int value : values) {
+      map = map.plus(new IntegerWithCustomHashCode(value, fixedHashCode), value);
+      ((HamtPMap<?, ?>) map).assertCorrectStructure();
+    }
+    return map;
+  }
+
+  // Helper class to test HamtPMap behavior given keys with hash code collisions.
+  private static final class IntegerWithCustomHashCode {
+    private final Integer i;
+    private final int hashCode;
+
+    IntegerWithCustomHashCode(Integer i, int hashCode) {
+      this.i = i;
+      this.hashCode = hashCode;
+    }
+
+    @Override
+    public int hashCode() {
+      return hashCode;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (o instanceof IntegerWithCustomHashCode) {
+        IntegerWithCustomHashCode that = (IntegerWithCustomHashCode) o;
+        return i.equals(that.i);
+      }
+      return false;
+    }
+  }
+
+  private static boolean equalsAndCheckNotNull(Object o1, Object o2) {
+    checkNotNull(o1);
+    checkNotNull(o2);
+    return Objects.equals(o1, o2);
   }
 }

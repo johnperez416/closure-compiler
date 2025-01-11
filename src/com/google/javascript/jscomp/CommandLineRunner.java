@@ -19,7 +19,6 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkState;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Ascii;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
@@ -28,8 +27,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Multimap;
 import com.google.common.io.Files;
+import com.google.errorprone.annotations.InlineMe;
+import com.google.errorprone.annotations.Keep;
 import com.google.javascript.jscomp.AbstractCommandLineRunner.CommandLineConfig.ErrorFormatOption;
 import com.google.javascript.jscomp.CompilerOptions.ChunkOutputType;
 import com.google.javascript.jscomp.CompilerOptions.ExtractPrototypeMemberDeclarationsMode;
@@ -62,7 +62,6 @@ import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
-import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
@@ -80,7 +79,7 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 import org.kohsuke.args4j.Argument;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
@@ -130,7 +129,6 @@ import org.kohsuke.args4j.spi.StringOptionHandler;
  *
  * This class is totally not thread-safe.
  */
-@GwtIncompatible("Unnecessary")
 public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, CompilerOptions> {
 
   public static final String OUTPUT_MARKER = AbstractCommandLineRunner.OUTPUT_MARKER;
@@ -174,6 +172,13 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     private boolean printTree = false;
 
     @Option(
+        name = "--print_tree_json",
+        hidden = true,
+        handler = BooleanOptionHandler.class,
+        usage = "Prints out the parse tree as json and exits")
+    private boolean printTreeJson = false;
+
+    @Option(
         name = "--print_ast",
         hidden = true,
         handler = BooleanOptionHandler.class,
@@ -181,17 +186,10 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     private boolean printAst = false;
 
     @Option(
-        name = "--print_pass_graph",
-        hidden = true,
-        handler = BooleanOptionHandler.class,
-        usage = "Prints a dot file describing the passes that will get run" + " and exits")
-    private boolean printPassGraph = false;
-
-    @Option(
         name = "--emit_use_strict",
         handler = BooleanOptionHandler.class,
         usage = "Start output with \"'use strict';\".")
-    private boolean emitUseStrict = true;
+    private boolean emitUseStrict = false;
 
     @Option(
         name = "--strict_mode_input",
@@ -221,6 +219,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         usage = "The file containing JavaScript externs. You may specify" + " multiple")
     private List<String> externs = new ArrayList<>();
 
+    @Keep
     @Option(
         name = "--js",
         handler = JsOptionHandler.class,
@@ -237,7 +236,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         hidden = true,
         handler = JsZipOptionHandler.class,
         usage = "The JavaScript zip filename. You may specify multiple.")
-    private List<String> unusedJsZip = null;
+    private @Nullable List<String> unusedJsZip = null;
 
     @Option(
         name = "--js_output_file",
@@ -264,38 +263,38 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         name = "--continue-saved-compilation",
         usage = "Filename where a stage 1 compilation state was previously saved.",
         hidden = true)
-    private String continueSavedCompilationFile = null;
+    private @Nullable String continueSavedCompilationFile = null;
 
     @Option(
         name = "--restore_stage1_from_file",
         usage = "Filename where a stage 1 compilation state was previously saved.",
         hidden = true)
-    private String restoreStage1FromFile = null;
+    private @Nullable String restoreStage1FromFile = null;
 
     @Option(
         name = "--restore_stage2_from_file",
         usage = "Filename where a stage 2 compilation state was previously saved.",
         hidden = true)
-    private String restoreStage2FromFile = null;
+    private @Nullable String restoreStage2FromFile = null;
 
     // TODO(bradfordcsmith): deprecate and remove this in favor of --save_stage1_to_file
     @Option(
         name = "--save-after-checks",
         usage = "Filename to save stage 1 state so that the compilation can be resumed later.",
         hidden = true)
-    private String saveAfterChecksFile = null;
+    private @Nullable String saveAfterChecksFile = null;
 
     @Option(
         name = "--save_stage1_to_file",
         usage = "Filename to save stage 1 state so that the compilation can be resumed later.",
         hidden = true)
-    private String saveStage1ToFile = null;
+    private @Nullable String saveStage1ToFile = null;
 
     @Option(
         name = "--save_stage2_to_file",
         usage = "Filename to save stage 2 state so that the compilation can be resumed later.",
         hidden = true)
-    private String saveStage2ToFile = null;
+    private @Nullable String saveStage2ToFile = null;
 
     @Option(
         name = "--variable_renaming_report",
@@ -307,9 +306,10 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     @Option(
         name = "--instrument_mapping_report",
         usage =
-            "File where the encoded parameters created by Production "
-                + "Instrumentation are mapped to their pre-encoded values. Must "
-                + "be used in tandem with --instrument_for_coverage_option=PRODUCTION")
+            "File where the encoded parameters created by Production Instrumentation are mapped to"
+                + " their pre-encoded values. The %outname% placeholder will expand to the name of"
+                + " the output file that the source map corresponds to. Must be used in tandem with"
+                + " --instrument_for_coverage_option=PRODUCTION")
     private String instrumentationMappingOutputFile = "";
 
     @Option(
@@ -437,17 +437,15 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     @Option(
         name = "--parse_inline_source_maps",
         handler = BooleanOptionHandler.class,
-        hidden = true,
         usage = "Parse inline source maps (//# sourceMappingURL=data:...)")
     private Boolean parseInlineSourceMaps = true;
 
     @Option(
         name = "--apply_input_source_maps",
         handler = BooleanOptionHandler.class,
-        hidden = true,
         usage =
             "Apply input source maps to the output source map, i.e. have the result map back"
-                + " tooriginal inputs.  Input sourcemaps can be located in 2 ways:\n"
+                + " to original inputs.  Input sourcemaps can be located in 2 ways:\n"
                 + " 1) by the//# sourceMappingURL=<url>. \n"
                 + " 2) using the--source_map_location_mapping flag.\n"
                 + "sourceMappingURL=<url> can read both paths and inline Base64 encoded"
@@ -514,7 +512,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 + "ADVANCED")
     private String compilationLevel = "SIMPLE";
 
-    private CompilationLevel compilationLevelParsed = null;
+    private @Nullable CompilationLevel compilationLevelParsed = null;
 
     @Option(
         name = "--num_parallel_threads",
@@ -579,7 +577,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         name = "--typed_ast_output_file__INTENRNAL_USE_ONLY",
         usage = "Sets file to output in-progress typedAST format. DO NOT USE!",
         hidden = true)
-    private String typedAstOutputFile = null;
+    private @Nullable String typedAstOutputFile = null;
 
     @Option(
         name = "--generate_exports",
@@ -629,14 +627,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     private boolean angularPass = false;
 
     @Option(name = "--polymer_version", usage = "Which version of Polymer is being used (1 or 2).")
-    private Integer polymerVersion = null;
-
-    @Option(
-        name = "--polymer_export_policy",
-        usage =
-            "How to handle exports/externs for Polymer properties and methods. "
-                + "Values: LEGACY, EXPORT_ALL.")
-    private String polymerExportPolicy = PolymerExportPolicy.LEGACY.name();
+    private @Nullable Integer polymerVersion = null;
 
     @Option(
         name = "--chrome_pass",
@@ -682,17 +673,19 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 + "Options: ECMASCRIPT3, ECMASCRIPT5, ECMASCRIPT5_STRICT, "
                 + "ECMASCRIPT_2015, ECMASCRIPT_2016, ECMASCRIPT_2017, "
                 + "ECMASCRIPT_2018, ECMASCRIPT_2019, ECMASCRIPT_2020,"
-                + "ECMASCRIPT_2021, STABLE, ECMASCRIPT_NEXT (latest features supported)")
+                + "ECMASCRIPT_2021, STABLE, ECMASCRIPT_NEXT (latest features supported),"
+                + "UNSTABLE (for testing only)")
     private String languageIn = "STABLE";
 
     @Option(
         name = "--language_out",
         usage =
             "Sets the language spec to which output should conform. "
-                + "Options: ECMASCRIPT3, ECMASCRIPT5, ECMASCRIPT5_STRICT, "
+                + "Options: ECMASCRIPT3, ECMASCRIPT5, "
                 + "ECMASCRIPT_2015, ECMASCRIPT_2016, ECMASCRIPT_2017, "
-                + "ECMASCRIPT_2018, ECMASCRIPT_2019, ECMASCRIPT_2020, ECMASCRIPT_2021, STABLE")
-    private String languageOut = "STABLE";
+                + "ECMASCRIPT_2018, ECMASCRIPT_2019, ECMASCRIPT_2020, "
+                + "ECMASCRIPT_2021, STABLE, ECMASCRIPT_NEXT (latest features supported)")
+    private String languageOut = "ECMASCRIPT_NEXT";
 
     @Option(
         name = "--version",
@@ -713,7 +706,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
             "Scopes all translations to the specified project."
                 + "When specified, we will use different message ids so that messages "
                 + "in different projects can have different translations.")
-    private String translationsProject = null;
+    private @Nullable String translationsProject = null;
 
     @Option(
         name = "--flagfile",
@@ -754,14 +747,14 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     @Option(
         name = "--rename_variable_prefix",
         usage = "Specifies a prefix that will be prepended to all variables.")
-    private String renamePrefix = null;
+    private @Nullable String renamePrefix = null;
 
     @Option(
         name = "--rename_prefix_namespace",
         usage =
             "Specifies the name of an object that will be used to store all "
                 + "non-extern globals")
-    private String renamePrefixNamespace = null;
+    private @Nullable String renamePrefixNamespace = null;
 
     @Option(
         name = "--conformance_configs",
@@ -803,7 +796,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         usage =
             "Force injection of named runtime libraries. "
                 + "The format is <name> where <name> is the name of a runtime library. "
-                + "Possible libraries include: base, es6_runtime, runtime_type_check")
+                + "Possible libraries include: base, es6_runtime")
     private List<String> forceInjectLibraries = new ArrayList<>();
 
     @Option(
@@ -817,8 +810,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 + "PRUNE_LEGACY same as PRUNE but files that do not goog.provide a namespace and "
                 + "are not modules will be automatically added as --entry_point entries. Defaults "
                 + "to PRUNE_LEGACY if entry points are defined, otherwise to NONE.")
-    @Nullable
-    private DependencyMode dependencyMode = null; // so we can tell whether it was explicitly set
+    private @Nullable DependencyMode dependencyMode =
+        null; // so we can tell whether it was explicitly set
 
     @Option(
         name = "--entry_point",
@@ -833,8 +826,18 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     @Option(
         name = "--rewrite_polyfills",
         handler = BooleanOptionHandler.class,
-        usage = "Rewrite ES6 library calls to use polyfills provided by the compiler's runtime.")
+        usage =
+            "Injects polyfills for ES2015+ library classes and methods used in source. See also"
+                + " the \"Polyfills\" GitHub Wiki page.")
     private boolean rewritePolyfills = true;
+
+    @Option(
+        name = "--isolate_polyfills",
+        handler = BooleanOptionHandler.class,
+        usage =
+            "Hides injected polyfills from the global scope and any external code. See the"
+                + " the \"Polyfills\" GitHub Wiki page for details.")
+    private boolean isolatePolyfills = false;
 
     @Option(
         name = "--print_source_after_each_pass",
@@ -865,7 +868,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 + " with the NODE module resolution strategy (i.e. esnext:main,browser,main)."
                 + " Defaults to a list with the following entries: \"browser\", \"module\","
                 + " \"main\".")
-    private String packageJsonEntryNames = null;
+    private @Nullable String packageJsonEntryNames = null;
 
     @Option(name = "--error_format", usage = "Specifies format for error messages.")
     private ErrorFormatOption errorFormat = ErrorFormatOption.STANDARD;
@@ -927,7 +930,39 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 + "using the specified name. Allows dynamic import expressions to be externally "
                 + "polyfilled when the output language level does not natively support them. "
                 + "An alias of 'import' is allowed.")
-    private String dynamicImportAlias = null;
+    private @Nullable String dynamicImportAlias = null;
+
+    @Option(
+        name = "--assume_static_inheritance_is_not_used",
+        handler = BooleanOptionHandler.class,
+        usage =
+            "Assume that static (class-side) inheritance is not being used and that static"
+                + " methods will not be referenced via `this` or through subclasses. This enables"
+                + " optimizations that could break code that did those things.")
+    private boolean assumeStaticInheritanceIsNotUsed = true;
+
+    @Option(
+        name = "--assume_no_prototype_method_enumeration",
+        handler = BooleanOptionHandler.class,
+        usage =
+            "Assume that prototype method enumeration is not being used. This allows the compiler "
+                + "to move a prototype method declaration into a deeper chunk without creating "
+                + "stub functions in a parent chunk.")
+    private boolean assumeNoPrototypeMethodEnumeration = false;
+
+    @Option(
+        name = "--variable_map_input_file",
+        usage =
+            "File containing the serialized version of the variable "
+                + "renaming map produced by a previous compilation")
+    private String variableMapInputFile = "";
+
+    @Option(
+        name = "--property_map_input_file",
+        usage =
+            "File containing the serialized version of the property "
+                + "renaming map produced by a previous compilation")
+    private String propertyMapInputFile = "";
 
     @Argument private List<String> arguments = new ArrayList<>();
     private final CmdLineParser parser;
@@ -938,7 +973,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
 
     /** Parse the given args list. */
     private void parse(List<String> args) throws CmdLineException {
-      parser.parseArgument(args.toArray(new String[] {}));
+      parser.parseArgument(args);
 
       compilationLevelParsed = CompilationLevel.fromString(Ascii.toUpperCase(compilationLevel));
       if (compilationLevelParsed == null) {
@@ -955,7 +990,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       }
     }
 
-    private static final Multimap<String, String> categories =
+    private static final ImmutableMultimap<String, String> categories =
         new ImmutableMultimap.Builder<String, String>()
             .putAll(
                 "Basic Usage",
@@ -985,6 +1020,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 ImmutableList.of(
                     "assume_function_wrapper",
                     "debug",
+                    "emit_use_strict",
                     "export_local_property_definitions",
                     "formatting",
                     "generate_exports",
@@ -1009,7 +1045,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                     "inject_libraries",
                     "polymer_version",
                     "process_closure_primitives",
-                    "rewrite_polyfills"))
+                    "rewrite_polyfills",
+                    "isolate_polyfills"))
             .putAll(
                 "Code Splitting",
                 ImmutableList.of(
@@ -1032,6 +1069,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
             .putAll(
                 "Miscellaneous",
                 ImmutableList.of(
+                    "assume_static_inheritance_is_not_used",
                     "browser_featureset_year",
                     "charset",
                     "checks_only",
@@ -1065,9 +1103,9 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
           } else {
             suffix =
                 "\n"
-                    + boldPrefix
+                    + BOLD_PREFIX
                     + "Available Error Groups: "
-                    + normalPrefix
+                    + NORMAL_PREFIX
                     + DiagnosticGroups.DIAGNOSTIC_GROUP_NAMES;
           }
         }
@@ -1085,9 +1123,9 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       ps.flush();
     }
 
-    private final String boldPrefix = "\033[1m";
-    private final String normalPrefix = "\033[0m";
-    private final String markdownCharsToEscape = "[-*\\`\\[\\]{}\\(\\)#+\\.!<>]";
+    private static final String BOLD_PREFIX = "\033[1m";
+    private static final String NORMAL_PREFIX = "\033[0m";
+    private static final String MARKDOWN_CHARS_TO_ESCAPE = "[-*\\`\\[\\]{}\\(\\)#+\\.!<>]";
 
     private void printCategoryUsage(
         String categoryName,
@@ -1119,7 +1157,6 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
                 });
             stringWriter.flush();
             String rawOptionUsage = stringWriter.toString();
-            Matcher optionNameMatches = Pattern.compile(" *--([a-z0-9_]+)").matcher(rawOptionUsage);
             int delimiterIndex = rawOptionUsage.indexOf(" : ");
             if (delimiterIndex > 0) {
               outputStream.write(
@@ -1128,16 +1165,16 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
               String optionDescription =
                   rawOptionUsage
                       .substring(delimiterIndex + 3)
-                      .replaceAll(markdownCharsToEscape, "\\\\$0")
+                      .replaceAll(MARKDOWN_CHARS_TO_ESCAPE, "\\\\$0")
                       .trim();
               outputStream.write(optionDescription + "\n");
             } else {
-              outputStream.write(rawOptionUsage.replaceAll(markdownCharsToEscape, "\\\\$0"));
+              outputStream.write(rawOptionUsage.replaceAll(MARKDOWN_CHARS_TO_ESCAPE, "\\\\$0"));
             }
             outputStream.flush();
           }
         } else {
-          outputStream.write(boldPrefix + categoryName + ":\n" + normalPrefix);
+          outputStream.write(BOLD_PREFIX + categoryName + ":\n" + NORMAL_PREFIX);
           parser.printUsage(
               outputStream,
               null,
@@ -1160,7 +1197,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     private int maxLineLength = 80;
-    private final Pattern whitespacePattern = Pattern.compile("\\s");
+    private static final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s");
 
     private void printStringLineWrapped(String input, OutputStreamWriter outputStream)
         throws IOException {
@@ -1171,7 +1208,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
 
       int endIndex = maxLineLength;
       String subString = input.substring(0, maxLineLength);
-      Matcher whitespaceMatcher = whitespacePattern.matcher(subString);
+      Matcher whitespaceMatcher = WHITESPACE_PATTERN.matcher(subString);
       boolean foundMatch = false;
       while (whitespaceMatcher.find()) {
         endIndex = whitespaceMatcher.start();
@@ -1240,7 +1277,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       return mixedSources;
     }
 
-    List<SourceMap.LocationMapping> getSourceMapLocationMappings() throws CmdLineException {
+    List<LocationMapping> getSourceMapLocationMappings() throws CmdLineException {
       ImmutableList.Builder<LocationMapping> locationMappings = ImmutableList.builder();
 
       ImmutableMap<String, String> split =
@@ -1271,7 +1308,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         result.put(parts.get(0), parts.get(1));
       }
 
-      return result.build();
+      return result.buildOrThrow();
     }
 
     List<String> getPackageJsonEntryNames() throws CmdLineException {
@@ -1284,6 +1321,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       private static final ImmutableSet<String> TRUES = ImmutableSet.of("true", "on", "yes", "1");
       private static final ImmutableSet<String> FALSES = ImmutableSet.of("false", "off", "no", "0");
 
+      // Handlers are used reflectively by args4j
+      @Keep
       public BooleanOptionHandler(
           CmdLineParser parser, OptionDef option, Setter<? super Boolean> setter) {
         super(parser, option, setter);
@@ -1324,6 +1363,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     // Our own parser for warning guards that preserves the original order
     // of the flags.
     public static class WarningGuardErrorOptionHandler extends StringOptionHandler {
+      // Handlers are used reflectively by args4j
+      @Keep
       public WarningGuardErrorOptionHandler(
           CmdLineParser parser, OptionDef option, Setter<? super String> setter) {
         super(parser, option, new MultiFlagSetter<>(setter, CheckLevel.ERROR, guardLevels));
@@ -1331,6 +1372,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     public static class WarningGuardWarningOptionHandler extends StringOptionHandler {
+      // Handlers are used reflectively by args4j
+      @Keep
       public WarningGuardWarningOptionHandler(
           CmdLineParser parser, OptionDef option, Setter<? super String> setter) {
         super(parser, option, new MultiFlagSetter<>(setter, CheckLevel.WARNING, guardLevels));
@@ -1338,6 +1381,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     public static class WarningGuardOffOptionHandler extends StringOptionHandler {
+      // Handlers are used reflectively by args4j
+      @Keep
       public WarningGuardOffOptionHandler(
           CmdLineParser parser, OptionDef option, Setter<? super String> setter) {
         super(parser, option, new MultiFlagSetter<>(setter, CheckLevel.OFF, guardLevels));
@@ -1345,6 +1390,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     public static class JsOptionHandler extends StringOptionHandler {
+      // Handlers are used reflectively by args4j
+      @Keep
       public JsOptionHandler(
           CmdLineParser parser, OptionDef option, Setter<? super String> setter) {
         super(parser, option, new MultiFlagSetter<>(setter, JsSourceType.JS, mixedJsSources));
@@ -1352,6 +1399,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     public static class JsZipOptionHandler extends StringOptionHandler {
+      // Handlers are used reflectively by args4j
+      @Keep
       public JsZipOptionHandler(
           CmdLineParser parser, OptionDef option, Setter<? super String> setter) {
         super(parser, option, new MultiFlagSetter<>(setter, JsSourceType.JS_ZIP, mixedJsSources));
@@ -1422,8 +1471,6 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         case SINGLE_QUOTES:
           options.setPreferSingleQuotes(true);
           break;
-        default:
-          throw new RuntimeException("Unknown formatting option: " + this);
       }
     }
   }
@@ -1435,7 +1482,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
   private boolean runCompiler = false;
 
   /** Cached error stream to avoid passing it as a parameter to helper functions. */
-  private PrintStream errorStream;
+  private @Nullable PrintStream errorStream;
 
   /**
    * Create a new command-line runner. You should only need to call the constructor if you're
@@ -1501,7 +1548,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
   }
 
   private void processFlagFile(String flagFileString) throws CmdLineException, IOException {
-    Path flagFile = Paths.get(flagFileString);
+    Path flagFile = Path.of(flagFileString);
 
     BufferedReader buffer = java.nio.file.Files.newBufferedReader(flagFile, UTF_8);
     // Builds the tokens.
@@ -1577,11 +1624,14 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
   }
 
+  @Override
   protected final String getVersionText() {
     return String.join(
         "\n", //
         "Closure Compiler (http://github.com/google/closure-compiler)",
-        "Version: " + ((String) inlineDefine_COMPILER_VERSION));
+        // CommandLineRunnerVersion refers to class created from CommandLineRunnerVersion.template
+        // with its static field COMPILER_VERSION substituted at build time.
+        "Version: " + CommandLineRunnerVersion.COMPILER_VERSION);
   }
 
   private void initConfigFromFlags(String[] args, PrintStream out, PrintStream err) {
@@ -1617,6 +1667,11 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       flags.processClosurePrimitives = true;
     }
 
+    if (flags.browserFeaturesetYear != 0 && flags.languageOut != "ECMASCRIPT_NEXT") {
+      throw new FlagUsageException(
+          "ERROR - both flags `--browser_featureset_year` and `--language_out` specified.");
+    }
+
     if (flags.outputWrapper == null) {
       flags.outputWrapper = "";
     }
@@ -1646,7 +1701,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     // Handle --compilation_level=BUNDLE
-    List<String> bundleFiles = ImmutableList.of();
+    ImmutableList<String> bundleFiles = ImmutableList.of();
     boolean skipNormalOutputs = false;
     if (flags.compilationLevelParsed == CompilationLevel.BUNDLE) {
       if (flags.jsOutputFile.isEmpty()) {
@@ -1692,8 +1747,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       config
           .setPrintVersion(flags.version)
           .setPrintTree(flags.printTree)
+          .setPrintTreeJson(flags.printTreeJson)
           .setPrintAst(flags.printAst)
-          .setPrintPassGraph(flags.printPassGraph)
           .setJscompDevMode(flags.jscompDevMode)
           .setLoggingLevel(flags.loggingLevel)
           .setExterns(flags.externs)
@@ -1704,6 +1759,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
           .setVariableMapOutputFile(flags.variableMapOutputFile)
           .setCreateNameMapFiles(flags.createNameMapFiles)
           .setPropertyMapOutputFile(flags.propertyMapOutputFile)
+          .setPropertyMapInputFile(flags.propertyMapInputFile)
+          .setVariableMapInputFile(flags.variableMapInputFile)
           .setInstrumentationMappingFile(flags.instrumentationMappingOutputFile)
           .setCodingConvention(conv)
           .setSummaryDetailLevel(flags.summaryDetailLevel)
@@ -1739,7 +1796,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         stage1RestoreFile = flags.continueSavedCompilationFile;
       }
       if (stage1RestoreFile != null) {
-        config.setContinueSavedCompilationFileName(stage1RestoreFile, /* stage= */ 1);
+        config.setContinueSavedCompilationFileName(
+            stage1RestoreFile, /* restoredCompilationStage= */ 1);
       }
       String stage2RestoreFile = flags.restoreStage2FromFile;
       if (stage1RestoreFile != null) {
@@ -1786,8 +1844,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     CompilerOptions options = new CompilerOptions();
 
     if (!flags.languageIn.isEmpty()) {
-      CompilerOptions.LanguageMode languageMode =
-          CompilerOptions.LanguageMode.fromString(flags.languageIn);
+      LanguageMode languageMode = LanguageMode.fromString(flags.languageIn);
       if (languageMode == LanguageMode.UNSUPPORTED) {
         throw new FlagUsageException(
             "Cannot specify the unsupported set of features for language_in.");
@@ -1795,25 +1852,29 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
       if (languageMode != null) {
         options.setLanguageIn(languageMode);
       } else {
-        throw new FlagUsageException("Unknown language `" + flags.languageIn + "' specified.");
+        throw new FlagUsageException(
+            "Unknown language `"
+                + flags.languageIn
+                + "' specified. Expected one of: "
+                + LanguageMode.validCommandLineNames());
       }
     }
 
-    if (flags.languageOut.isEmpty()) {
-      options.setLanguageOut(options.getLanguageIn());
-    } else {
-      CompilerOptions.LanguageMode languageMode =
-          CompilerOptions.LanguageMode.fromString(flags.languageOut);
-      if (languageMode == LanguageMode.UNSUPPORTED) {
-        throw new FlagUsageException(
-            "Cannot specify the unsupported set of features for language_out.");
-      }
-      if (languageMode != null) {
-        options.setLanguageOut(languageMode);
-      } else {
-        throw new FlagUsageException("Unknown language `" + flags.languageOut + "' specified.");
-      }
+    LanguageMode languageMode = LanguageMode.fromString(flags.languageOut);
+    if (languageMode == LanguageMode.UNSUPPORTED) {
+      throw new FlagUsageException(
+          "Cannot specify the unsupported set of features for language_out.");
     }
+    if (languageMode != null) {
+      options.setLanguageOut(languageMode);
+    } else {
+      throw new FlagUsageException(
+          "Unknown language `"
+              + flags.languageOut
+              + "' specified. Expected one of: "
+              + LanguageMode.validCommandLineNames());
+    }
+
 
     options.setCodingConvention(new ClosureCodingConvention());
 
@@ -1839,9 +1900,6 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
 
     options.setContinueAfterErrors(flags.continueAfterErrors);
 
-    // TODO(b/144593112): remove this flag.
-    options.setBadRewriteModulesBeforeTypecheckingThatWeWantToGetRidOf(true);
-
     if (flags.useTypesForOptimization) {
       level.setTypeBasedOptimizationOptions(options);
     }
@@ -1853,7 +1911,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     }
 
     if (flags.typedAstOutputFile != null) {
-      options.setTypedAstOutputFile(Paths.get(flags.typedAstOutputFile));
+      options.setTypedAstOutputFile(Path.of(flags.typedAstOutputFile));
     }
     options.setGenerateExports(flags.generateExports);
     options.setExportLocalPropertyDefinitions(flags.exportLocalPropertyDefinitions);
@@ -1868,14 +1926,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
 
     options.angularPass = flags.angularPass;
 
-    options.polymerVersion = flags.polymerVersion;
-    try {
-      options.polymerExportPolicy =
-          PolymerExportPolicy.valueOf(Ascii.toUpperCase(flags.polymerExportPolicy));
-    } catch (IllegalArgumentException ex) {
-      throw new FlagUsageException(
-          "Unknown PolymerExportPolicy `" + flags.polymerExportPolicy + "' specified.");
-    }
+    options.setPolymerVersion(flags.polymerVersion);
 
     options.setChromePass(flags.chromePass);
 
@@ -1907,6 +1958,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     options.rewritePolyfills =
         flags.rewritePolyfills
             && options.getLanguageIn().toFeatureSet().contains(FeatureSet.ES2015);
+    options.setIsolatePolyfills(flags.isolatePolyfills);
 
     if (!flags.translationsFile.isEmpty()) {
       try {
@@ -1934,9 +1986,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     options.setPrintSourceAfterEachPass(flags.printSourceAfterEachPass);
     options.setTracerMode(flags.tracerMode);
     options.setStrictModeInput(flags.strictModeInput);
-    if (!flags.emitUseStrict) {
-      options.setEmitUseStrict(false);
-    }
+    options.setEmitUseStrict(flags.emitUseStrict);
     options.setSourceMapIncludeSourcesContent(flags.sourceMapIncludeSourcesContent);
     options.setModuleResolutionMode(flags.moduleResolutionMode);
     options.setBrowserResolverPrefixReplacements(
@@ -1980,6 +2030,8 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     options.setProductionInstrumentationArrayName(flags.productionInstrumentationArrayName);
     options.setAllowDynamicImport(flags.allowDynamicImport);
     options.setDynamicImportAlias(flags.dynamicImportAlias);
+    options.setAssumeStaticInheritanceIsNotUsed(flags.assumeStaticInheritanceIsNotUsed);
+    options.setCrossChunkCodeMotionNoStubMethods(flags.assumeNoPrototypeMethodEnumeration);
 
     if (flags.chunkOutputType == ChunkOutputType.ES_MODULES) {
       if (flags.renamePrefixNamespace != null) {
@@ -2094,6 +2146,12 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
     return builder.build();
   }
 
+  @InlineMe(
+      replacement = "CommandLineRunner.getBuiltinExterns(CompilerOptions.Environment.BROWSER)",
+      imports = {
+        "com.google.javascript.jscomp.CommandLineRunner",
+        "com.google.javascript.jscomp.CompilerOptions"
+      })
   @Deprecated
   public static List<SourceFile> getDefaultExterns() throws IOException {
     return getBuiltinExterns(CompilerOptions.Environment.BROWSER);
@@ -2127,7 +2185,7 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         if (matchedFile.isDirectory()) {
           matchPaths(new File(matchedFile, "**.js").toString(), allJsInputs, excludes);
         } else {
-          Path original = Paths.get(pattern);
+          Path original = Path.of(pattern);
           String pathStringAbsolute = original.normalize().toAbsolutePath().toString();
           if (!excludes.contains(pathStringAbsolute)) {
             allJsInputs.put(pathStringAbsolute, original.toString());
@@ -2193,12 +2251,16 @@ public class CommandLineRunner extends AbstractCommandLineRunner<Compiler, Compi
         });
   }
 
-  /** @return Whether the configuration is valid and specifies to run the compiler. */
+  /**
+   * @return Whether the configuration is valid and specifies to run the compiler.
+   */
   public boolean shouldRunCompiler() {
     return this.runCompiler;
   }
 
-  /** @return Whether the configuration has errors. */
+  /**
+   * @return Whether the configuration has errors.
+   */
   public boolean hasErrors() {
     return this.errors;
   }

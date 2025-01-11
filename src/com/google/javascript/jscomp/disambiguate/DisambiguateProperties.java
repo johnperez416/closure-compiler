@@ -31,21 +31,28 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.ImmutableSortedSet;
+import com.google.errorprone.annotations.Keep;
+import com.google.gson.Gson;
+import com.google.gson.stream.JsonWriter;
 import com.google.javascript.jscomp.AbstractCompiler;
 import com.google.javascript.jscomp.CompilerPass;
 import com.google.javascript.jscomp.DiagnosticType;
 import com.google.javascript.jscomp.GatherGetterAndSetterProperties;
+import com.google.javascript.jscomp.JSError;
 import com.google.javascript.jscomp.NodeTraversal;
+import com.google.javascript.jscomp.base.format.SimpleFormat;
 import com.google.javascript.jscomp.colors.Color;
 import com.google.javascript.jscomp.colors.ColorRegistry;
 import com.google.javascript.jscomp.diagnostic.LogFile;
 import com.google.javascript.jscomp.disambiguate.ColorGraphNode.PropAssociation;
+import com.google.javascript.jscomp.disambiguate.UseSiteRenamer.RenameUsesResult;
 import com.google.javascript.jscomp.graph.DiGraph;
 import com.google.javascript.jscomp.graph.DiGraph.DiGraphEdge;
 import com.google.javascript.jscomp.graph.DiGraph.DiGraphNode;
 import com.google.javascript.jscomp.graph.FixedPointGraphTraversal;
 import com.google.javascript.jscomp.graph.LowestCommonAncestorFinder;
 import com.google.javascript.rhino.Node;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -57,7 +64,9 @@ public final class DisambiguateProperties implements CompilerPass {
       DiagnosticType.error(
           "JSC_DISAMBIGUATE2_PROPERTY_INVALIDATION",
           "Property ''{0}'' was required to be disambiguated but was invalidated."
-          );
+              + "{1}");
+
+  private static final Gson GSON = new Gson();
 
   private final AbstractCompiler compiler;
   private final ImmutableSet<String> propertiesThatMustDisambiguate;
@@ -82,10 +91,7 @@ public final class DisambiguateProperties implements CompilerPass {
         new ColorGraphBuilder(flattener, LowestCommonAncestorFinder::new, this.registry);
     ClusterPropagator propagator = new ClusterPropagator();
     UseSiteRenamer renamer =
-        new UseSiteRenamer(
-            this.propertiesThatMustDisambiguate,
-            /* errorCb= */ this.compiler::report,
-            /* mutationCb= */ this.compiler::reportChangeToEnclosingScope);
+        new UseSiteRenamer(/* mutationCb= */ this.compiler::reportChangeToEnclosingScope);
 
     NodeTraversal.traverse(this.compiler, externs.getParent(), findRefs);
     LinkedHashMap<String, PropertyClustering> propIndex = findRefs.getPropertyIndex();
@@ -93,10 +99,23 @@ public final class DisambiguateProperties implements CompilerPass {
     invalidateWellKnownProperties(propIndex);
     this.logForDiagnostics(
         "prop_refs",
-        () ->
-            propIndex.values().stream()
-                .map(PropertyReferenceIndexJson::new)
-                .collect(toImmutableSortedMap(naturalOrder(), (x) -> x.name, (x) -> x)));
+        // use a StreamedJsonProducer instead of building up the entire json string at once to
+        // prevent OOMs for very large projects.
+        new LogFile.StreamedJsonProducer() {
+          @Override
+          public void writeJson(JsonWriter writer) throws IOException {
+            ImmutableSortedSet<PropertyReferenceIndexJson> propRefsJson =
+                propIndex.values().stream()
+                    .map(PropertyReferenceIndexJson::new)
+                    .collect(toImmutableSortedSet(naturalOrder()));
+
+            writer.beginObject();
+            for (PropertyReferenceIndexJson propRef : propRefsJson) {
+              propRef.writeJson(writer);
+            }
+            writer.endObject();
+          }
+        });
 
     graphBuilder.addAll(flattener.getAllKnownTypes());
     DiGraph<ColorGraphNode, Object> graph = graphBuilder.build();
@@ -125,17 +144,65 @@ public final class DisambiguateProperties implements CompilerPass {
                 .sorted(comparingInt((x) -> x.index))
                 .collect(toImmutableList()));
 
-    // Ensure this step happens after logging PropertyReferenceIndexJson. Invalidating a property
-    // destroys its list of use sites, which we need to log.
     invalidateBasedOnType(flattener);
 
     FixedPointGraphTraversal.newTraversal(propagator).computeFixedPoint(graph);
-    propIndex.values().forEach(renamer::renameUses);
+
+    TrackerSummaryGenerator trackerSummaryGenerator = new TrackerSummaryGenerator();
+    for (PropertyClustering prop : propIndex.values()) {
+      RenameUsesResult renameUsesResult = renamer.renameUses(prop);
+      trackerSummaryGenerator.addRenameUsesResult(renameUsesResult);
+      if (prop.isInvalidated() && this.propertiesThatMustDisambiguate.contains(prop.getName())) {
+        this.compiler.report(this.createInvalidationError(prop));
+      }
+    }
+    compiler.reportDisambiguatePropertiesSummary(trackerSummaryGenerator::buildSummaryString);
 
     this.logForDiagnostics("renaming_index", () -> buildRenamingIndex(propIndex, renamer));
-    this.logForDiagnostics("mismatches", this.registry::getMismatchLocationsForDebugging);
+    this.logForDiagnostics("mismatches", this.registry.getMismatchLocationsForDebugging()::inverse);
 
     GatherGetterAndSetterProperties.update(this.compiler, externs, root);
+  }
+
+  /** No-op class to use when tracer mode is not enabled. */
+  private static class TrackerSummaryGenerator {
+    int total = 0;
+    int numInvalidated = 0;
+    int numDisambiguated = 0;
+    int numOnlyOneCluster = 0;
+
+    void addRenameUsesResult(RenameUsesResult renameUsesResult) {
+      total++;
+      switch (renameUsesResult) {
+        case INVALIDATED:
+          numInvalidated++;
+          break;
+        case ONLY_ONE_CLUSTER:
+          numOnlyOneCluster++;
+          break;
+        case DISAMBIGUATED:
+          numDisambiguated++;
+          break;
+      }
+    }
+
+    private String buildSummaryString() {
+      return SimpleFormat.format(
+          "%d property names, %d disambiguated, %d invalidated, %d had a single cluster",
+          total, numDisambiguated, numInvalidated, numOnlyOneCluster);
+    }
+  }
+
+  private JSError createInvalidationError(PropertyClustering prop) {
+    String additionalContext = "";
+
+    return JSError.make(
+        null,
+        -1,
+        -1,
+        DisambiguateProperties.PROPERTY_INVALIDATION,
+        prop.getName(),
+        additionalContext);
   }
 
   private static ImmutableMap<String, Object> buildRenamingIndex(
@@ -154,7 +221,7 @@ public final class DisambiguateProperties implements CompilerPass {
 
   private static void invalidateWellKnownProperties(
       LinkedHashMap<String, PropertyClustering> propIndex) {
-    /**
+    /*
      * Expand this list as needed; it wasn't created exhaustively.
      *
      * <p>Good candidates are: props accessed by builtin functions, props accessed by syntax sugar,
@@ -266,7 +333,14 @@ public final class DisambiguateProperties implements CompilerPass {
     }
   }
 
-  private static final class PropertyReferenceIndexJson {
+  private void logForDiagnostics(String name, LogFile.StreamedJsonProducer data) {
+    try (LogFile log = this.compiler.createOrReopenLog(this.getClass(), name + ".log")) {
+      log.logJson(data);
+    }
+  }
+
+  private static final class PropertyReferenceIndexJson
+      implements Comparable<PropertyReferenceIndexJson> {
     final String name;
     final ImmutableSortedSet<PropertyReferenceJson> refs;
 
@@ -280,6 +354,26 @@ public final class DisambiguateProperties implements CompilerPass {
                 .map((e) -> new PropertyReferenceJson(e.getKey(), e.getValue()))
                 .collect(toImmutableSortedSet(naturalOrder()));
       }
+    }
+
+    @Override
+    public int compareTo(PropertyReferenceIndexJson x) {
+      return this.name.compareTo(x.name);
+    }
+
+    private void writeJson(JsonWriter writer) throws IOException {
+      // creates an entry such as:
+      //   foo: {name: 'foo', refs: [{location: 'bar.js:3:4', receiverIndex: 2}]}
+      writer.name(this.name);
+
+      writer.beginObject();
+      writer.name("name").value(this.name);
+      writer.name("refs").beginArray();
+      for (PropertyReferenceJson ref : this.refs) {
+        GSON.toJson(ref, PropertyReferenceJson.class, writer);
+      }
+      writer.endArray();
+      writer.endObject();
     }
   }
 
@@ -303,10 +397,11 @@ public final class DisambiguateProperties implements CompilerPass {
 
   private static final class TypeNodeJson {
     final int index;
-    final boolean invalidating;
-    final String colorId;
-    final ImmutableSortedSet<TypeEdgeJson> edges;
-    final ImmutableSortedMap<String, ColorGraphNode.PropAssociation> props;
+    // These fields are used reflectively via GSON.
+    @Keep final boolean invalidating;
+    @Keep final String colorId;
+    @Keep final ImmutableSortedSet<TypeEdgeJson> edges;
+    @Keep final ImmutableSortedMap<String, PropAssociation> props;
 
     TypeNodeJson(DiGraphNode<ColorGraphNode, Object> n) {
       ColorGraphNode t = n.getValue();
@@ -328,7 +423,8 @@ public final class DisambiguateProperties implements CompilerPass {
 
   private static final class TypeEdgeJson implements Comparable<TypeEdgeJson> {
     final int dest;
-    final Object value;
+    // This field is used reflectively via GSON.
+    @Keep final Object value;
 
     TypeEdgeJson(DiGraphEdge<ColorGraphNode, Object> e) {
       this.dest = e.getDestination().getValue().getIndex();
@@ -341,5 +437,4 @@ public final class DisambiguateProperties implements CompilerPass {
       return this.dest - x.dest;
     }
   }
-
 }

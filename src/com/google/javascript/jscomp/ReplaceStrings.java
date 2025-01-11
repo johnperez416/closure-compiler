@@ -30,11 +30,10 @@ import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Replaces JavaScript strings in the list of supplied functions with shortened forms. Useful for
@@ -63,7 +62,7 @@ class ReplaceStrings extends AbstractPostOrderCallback implements CompilerPass {
 
   private final AbstractCompiler compiler;
 
-  private final Map<String, Config> functions = new HashMap<>();
+  private final Map<String, Config> functions = new LinkedHashMap<>();
   private final DefaultNameGenerator nameGenerator;
   private final Map<String, Result> results = new LinkedHashMap<>();
 
@@ -140,7 +139,7 @@ class ReplaceStrings extends AbstractPostOrderCallback implements CompilerPass {
       map.put(result.replacement, result.original);
     }
 
-    return new VariableMap(map.build());
+    return new VariableMap(map.buildOrThrow());
   }
 
   @Override
@@ -177,7 +176,7 @@ class ReplaceStrings extends AbstractPostOrderCallback implements CompilerPass {
    * @param callsiteSourceFileName the filename containing the callsite
    * @return The Config object for the name or null if no match was found.
    */
-  private Config findMatching(String name, String callsiteSourceFileName) {
+  private @Nullable Config findMatching(String name, String callsiteSourceFileName) {
     Config config = functions.get(name);
     if (config == null) {
       name = name.replace('$', '.');
@@ -369,8 +368,7 @@ class ReplaceStrings extends AbstractPostOrderCallback implements CompilerPass {
    *
    * @return null if this is an invalid function, otherwise the Config
    */
-  @Nullable
-  private Config parseConfiguration(String function) {
+  private @Nullable Config parseConfiguration(String function) {
     // Looks like this function_name(,$,)
     int first = function.indexOf('(');
     int last = function.indexOf(')');
@@ -405,7 +403,7 @@ class ReplaceStrings extends AbstractPostOrderCallback implements CompilerPass {
         replacementParameters.add(paramCount);
       } else {
         // TODO(johnlenz): report an error.
-        Preconditions.checkState(param.isEmpty(), "Unknown marker", param);
+        Preconditions.checkState(param.isEmpty(), "Unknown marker (%s)", param);
       }
     }
 

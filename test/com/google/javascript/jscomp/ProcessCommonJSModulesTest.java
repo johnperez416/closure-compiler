@@ -19,7 +19,7 @@ package com.google.javascript.jscomp;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.javascript.jscomp.deps.ModuleLoader;
-import java.util.Map;
+import org.jspecify.annotations.Nullable;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -28,7 +28,7 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public final class ProcessCommonJSModulesTest extends CompilerTestCase {
 
-  private ImmutableList<String> moduleRoots = null;
+  private @Nullable ImmutableList<String> moduleRoots = null;
   private ModuleLoader.ResolutionMode resolutionMode = ModuleLoader.ResolutionMode.NODE;
 
   @Override
@@ -413,10 +413,14 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "}));"),
         lines(
             "/** @const */ var module$test = {};",
-            "var angular$$module$test = ",
-            "    typeof angular === 'undefined' ? module$other.default : angular;",
-            "console.log(angular$$module$test);",
-            "module$test.default = angular$$module$test;"));
+            "var global$$module$test = this;",
+            "var factory$$module$test = function(angular) {",
+            "  console.log(angular);",
+            "  return angular;",
+            "};",
+            "/** @const */ ",
+            "module$test.default = factory$$module$test(typeof angular === \"undefined\" ?"
+                + " module$other.default : angular);"));
 
     testModules(
         "test.js",
@@ -435,10 +439,14 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "}));"),
         lines(
             "/** @const */ var module$test = {};",
-            "var angular$$module$test = ",
-            "    typeof angular === 'undefined' ? module$other.default : angular;",
-            "console.log(angular$$module$test);",
-            "module$test.default = angular$$module$test;"));
+            "var global$$module$test = this;",
+            "var factory$$module$test = function(angular) {",
+            "  console.log(angular);",
+            "  return angular;",
+            "};",
+            "/** @const */ ",
+            "module$test.default = factory$$module$test(typeof angular === \"undefined\" ?"
+                + " module$other.default : angular);"));
   }
 
   @Test
@@ -600,10 +608,10 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
   @Test
   public void testMultipleAssignments() {
 
-    JSChunk module = new JSChunk("out");
-    module.add(SourceFile.fromCode("other.js", "goog.provide('module$other');"));
-    module.add(SourceFile.fromCode("yet_another.js", "goog.provide('module$yet_another');"));
-    module.add(
+    JSChunk chunk = new JSChunk("out");
+    chunk.add(SourceFile.fromCode("other.js", "goog.provide('module$other');"));
+    chunk.add(SourceFile.fromCode("yet_another.js", "goog.provide('module$yet_another');"));
+    chunk.add(
         SourceFile.fromCode(
             "test",
             lines(
@@ -612,9 +620,9 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
                 "/** @constructor */ function Bar() {} ",
                 "Bar.prototype.foobar = function() { alert('foobar'); };",
                 "exports = Bar;")));
-    JSChunk[] modules = {module};
+    JSChunk[] chunks = {chunk};
     test(
-        srcs(modules),
+        srcs(chunks),
         expected((String[]) null),
         new Diagnostic(
             ProcessCommonJSModules.SUSPICIOUS_EXPORTS_ASSIGNMENT.level,
@@ -1003,7 +1011,7 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
                 + " __WEBPACK_AMD_DEFINE_RESULT__$$module$test))",
             "})()"));
 
-    Map<String, String> webpackModulesById =
+    ImmutableMap<String, String> webpackModulesById =
         ImmutableMap.of(
             "1", "other.js",
             "yet_another.js", "yet_another.js",
@@ -1039,6 +1047,7 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "var __WEBPACK_AMD_DEFINE_ARRAY__$$module$test;",
             "/** @suppress {duplicate} */",
             "module$test.default;",
+            "var root$$module$test = this;",
             "var factory$$module$test = function (angular, tinymce) {",
             "  console.log(angular, tinymce)",
             "};",
@@ -1105,10 +1114,15 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "})));"),
         lines(
             "/** @const */ var module$test={/** @const */ default: {}};",
-            "module$test.default.webkit=userAgentContains$$module$test('webkit');",
-            "function userAgentContains$$module$test(str) {",
-            "  return navigator.userAgent.toLowerCase().indexOf(str) >= 0;",
-            "}"));
+            "var global$$module$test = this;",
+            "var factory$$module$test = function(exports) {",
+            "  var webkit = userAgentContains(\"webkit\");",
+            "  function userAgentContains(str) {",
+            "    return navigator.userAgent.toLowerCase().indexOf(str) >= 0;",
+            "  }",
+            "  exports.webkit = webkit;",
+            "};",
+            "factory$$module$test(module$test.default);"));
   }
 
   @Test
@@ -1127,7 +1141,13 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "});"),
         lines(
             "/** @const */ var module$test={};",
-            "/** @const */ module$test.default = {foo: 'bar'};"));
+            "var root$$module$test = this;",
+            "var name$$module$test = \"foobar\";",
+            "var definition$$module$test = function() {",
+            "  return {foo: 'bar'};",
+            "};",
+            "/** @const */",
+            "module$test.default = definition$$module$test();"));
   }
 
   @Test
@@ -1224,12 +1244,18 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "})"),
         lines(
             "/** @const */ var module$test = {};",
-            "var Fingerprint2$$module$test = function() {",
-            "  if (!(this instanceof Fingerprint2$$module$test)) {",
-            "    return new Fingerprint2$$module$test();",
-            "  }",
+            "var name$$module$test = \"Fingerprint2\";",
+            "var context$$module$test = this;",
+            "var definition$$module$test = function() {",
+            "  var Fingerprint2 = function() {",
+            "    if (!(this instanceof Fingerprint2)) {",
+            "      return new Fingerprint2();",
+            "    }",
+            "  };",
+            "  return Fingerprint2;",
             "};",
-            "module$test.default = Fingerprint2$$module$test;"));
+            "/** @const */ ",
+            "module$test.default = definition$$module$test();"));
   }
 
   @Test
@@ -1335,7 +1361,7 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
 
   @Test
   public void testWebpackRequire() {
-    Map<String, String> webpackModulesById =
+    ImmutableMap<String, String> webpackModulesById =
         ImmutableMap.of(
             "1", "other.js",
             "2", "yet_another.js",
@@ -1354,7 +1380,7 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
 
   @Test
   public void testWebpackRequireString() {
-    Map<String, String> webpackModulesById =
+    ImmutableMap<String, String> webpackModulesById =
         ImmutableMap.of(
             "1", "other.js",
             "yet_another.js", "yet_another.js",
@@ -1373,7 +1399,7 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
 
   @Test
   public void testWebpackAMDModuleShim() {
-    Map<String, String> webpackModulesById =
+    ImmutableMap<String, String> webpackModulesById =
         ImmutableMap.of(
             "1", "test.js",
             "2", "/webpack/buildin/module.js");
@@ -1462,7 +1488,9 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "module$test.default = module$test.default.default;"));
   }
 
-  /** @see https://github.com/google/closure-compiler/issues/2999 */
+  /**
+   * @see https://github.com/google/closure-compiler/issues/2999
+   */
   @Test
   public void testLodashModulesCheck() {
     testModules(
@@ -1486,7 +1514,9 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
             "module$test.default = true;"));
   }
 
-  /** @see https://github.com/google/closure-compiler/issues/3051 */
+  /**
+   * @see https://github.com/google/closure-compiler/issues/3051
+   */
   @Test
   public void testIssue3051() {
     testModules(
@@ -1547,7 +1577,7 @@ public final class ProcessCommonJSModulesTest extends CompilerTestCase {
 
   @Test
   public void testWebpackRequireNamespace() {
-    Map<String, String> webpackModulesById =
+    ImmutableMap<String, String> webpackModulesById =
         ImmutableMap.of(
             "1", "other.js",
             "yet_another.js", "yet_another.js",

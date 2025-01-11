@@ -22,8 +22,9 @@ import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.QualifiedName;
 import com.google.javascript.rhino.Token;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -41,18 +42,17 @@ final class ClosureOptimizePrimitives implements CompilerPass {
   static final DiagnosticType DUPLICATE_SET_MEMBER =
       DiagnosticType.warning("JSC_DUPLICATE_SET_MEMBER", "Found duplicate value ''{0}'' in set");
 
+  private static final QualifiedName GOOG_OBJECT_CREATE = QualifiedName.of("goog.object.create");
+  private static final QualifiedName GOOG_OBJECT_CREATESET =
+      QualifiedName.of("goog.object.createSet");
+
   /** Reference to the JS compiler */
   private final AbstractCompiler compiler;
-
-  /** Whether property renaming is enabled */
-  private final boolean propertyRenamingEnabled;
 
   /** Whether we can use Es6 syntax */
   private final boolean canUseEs6Syntax;
 
-  /**
-   * Identifies all calls to closure primitive functions
-   */
+  /** Identifies all calls to closure primitive functions */
   private class FindPrimitives extends AbstractPostOrderCallback {
 
     @Override
@@ -61,28 +61,26 @@ final class ClosureOptimizePrimitives implements CompilerPass {
         Node fn = n.getFirstChild();
         // TODO(user): Once goog.object becomes a goog.module, remove "goog$object$create" and
         // related checks.
-        if (compiler
-            .getCodingConvention()
-            .isPropertyRenameFunction(fn.getOriginalQualifiedName())) {
+        if (compiler.getCodingConvention().isPropertyRenameFunction(fn)) {
           processRenamePropertyCall(n);
         } else if (fn.matchesName("goog$object$create")
             || fn.matchesName("module$contents$goog$object_create")
-            || fn.matchesQualifiedName("goog.object.create")) {
+            || GOOG_OBJECT_CREATE.matches(fn)) {
           processObjectCreateCall(n);
         } else if (fn.matchesName("goog$object$createSet")
             || fn.matchesName("module$contents$goog$object_createSet")
-            || fn.matchesQualifiedName("goog.object.createSet")) {
+            || GOOG_OBJECT_CREATESET.matches(fn)) {
           processObjectCreateSetCall(n);
         }
       }
     }
   }
 
-  /** @param compiler The AbstractCompiler */
-  ClosureOptimizePrimitives(
-      AbstractCompiler compiler, boolean propertyRenamingEnabled, boolean canUseEs6Syntax) {
+  /**
+   * @param compiler The AbstractCompiler
+   */
+  ClosureOptimizePrimitives(AbstractCompiler compiler, boolean canUseEs6Syntax) {
     this.compiler = compiler;
-    this.propertyRenamingEnabled = propertyRenamingEnabled;
     this.canUseEs6Syntax = canUseEs6Syntax;
   }
 
@@ -92,10 +90,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     NodeTraversal.traverse(compiler, root, pass);
   }
 
-  /**
-   * Converts all of the given call nodes to object literals that are safe to
-   * do so.
-   */
+  /** Converts all of the given call nodes to object literals that are safe to do so. */
   private void processObjectCreateCall(Node callNode) {
     Node curParam = callNode.getSecondChild();
     if (canOptimizeObjectCreate(curParam)) {
@@ -115,23 +110,8 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     }
   }
 
-  /**
-   * Converts all of the given call nodes to object literals that are safe to
-   * do so.
-   */
+  /** Converts all of the given call nodes to object literals that are safe to do so. */
   private void processRenamePropertyCall(Node callNode) {
-    // Property reflection calls are only needed if
-    // property renaming is enabled. Replace the call with the
-    // first argument in all other cases.
-    if (!propertyRenamingEnabled) {
-      Node propName = NodeUtil.getArgumentForCallOrNew(callNode, 0);
-      if (propName != null) {
-        callNode.replaceWith(propName.detach());
-        compiler.reportChangeToEnclosingScope(propName);
-        return;
-      }
-    }
-
     Node nameNode = callNode.getFirstChild();
     if (nameNode.matchesQualifiedName(NodeUtil.JSC_PROPERTY_NAME_FN)) {
       return;
@@ -145,10 +125,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     compiler.reportChangeToEnclosingScope(callNode);
   }
 
-  /**
-   * Returns whether the given call to goog.object.create can be converted to an
-   * object literal.
-   */
+  /** Returns whether the given call to goog.object.create can be converted to an object literal. */
   private boolean canOptimizeObjectCreate(Node firstParam) {
     Node curParam = firstParam;
     while (curParam != null) {
@@ -166,10 +143,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     return true;
   }
 
-  /**
-   * Converts all of the given call nodes to object literals that are safe to
-   * do so.
-   */
+  /** Converts all of the given call nodes to object literals that are safe to do so. */
   private void processObjectCreateSetCall(Node callNode) {
     Node curParam = callNode.getSecondChild();
     if (canOptimizeObjectCreateSet(curParam)) {
@@ -202,7 +176,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     }
 
     Node curParam = firstParam;
-    Set<String> keys = new HashSet<>();
+    Set<String> keys = new LinkedHashSet<>();
     while (curParam != null) {
       // All keys must be strings or numbers, otherwise we can't optimize the call.
       if (!isOptimizableKey(curParam)) {
@@ -221,15 +195,15 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     return true;
   }
 
-  private void addKeyValueToObjLit(Node objNode, Node keyNode, Node valueNode,
-      Node scriptNode) {
+  private void addKeyValueToObjLit(Node objNode, Node keyNode, Node valueNode, Node scriptNode) {
     if (keyNode.isNumber() || keyNode.isStringLit()) {
       if (keyNode.isNumber()) {
-        keyNode = IR.string(numberToString(keyNode.getDouble()))
-            .srcref(keyNode);
+        keyNode = IR.string(numberToString(keyNode.getDouble())).srcref(keyNode);
       }
+      // It isn't valid for a `STRING_KEY` to be marked as parenthesized.
+      keyNode.setIsParenthesized(false);
       keyNode.setToken(Token.STRING_KEY);
-      keyNode.setQuotedString();
+      keyNode.setQuotedStringKey();
       objNode.addChildToBack(IR.propdef(keyNode, valueNode));
     } else {
       objNode.addChildToBack(IR.computedProp(keyNode, valueNode).srcref(keyNode));

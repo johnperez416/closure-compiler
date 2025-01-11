@@ -20,11 +20,9 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.Answers.RETURNS_SMART_NULLS;
 import static org.mockito.Mockito.when;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.JSError;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -33,7 +31,6 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 /** Tests for {@link Transpiler}. */
-@GwtIncompatible
 @RunWith(JUnit4.class)
 public final class TranspilerTest {
 
@@ -43,8 +40,8 @@ public final class TranspilerTest {
   @Mock(answer = RETURNS_SMART_NULLS)
   Transpiler.CompilerSupplier mockCompiler;
 
-  private static final Path FOO_JS = Paths.get("foo.js");
-  private static final Path SOURCE_JS = Paths.get("source.js");
+  private static final Path FOO_JS = Path.of("foo.js");
+  private static final Path SOURCE_JS = Path.of("source.js");
   private static final ImmutableList<JSError> NO_ERRORS = ImmutableList.of();
 
   @Before

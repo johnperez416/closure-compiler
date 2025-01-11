@@ -43,6 +43,7 @@ import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
+import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.javascript.rhino.PMap.Reconciler;
 import java.io.Serializable;
 import java.util.ArrayDeque;
@@ -52,7 +53,7 @@ import java.util.Deque;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.function.BiPredicate;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An immutable sorted map with efficient (persistent) updates.
@@ -88,13 +89,13 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
   private static final int BITS_SHIFT = 32 - BITS;
 
   /** Non-null key (exception: empty map has a null key). */
-  private final K key;
+  private final @Nullable K key;
 
   /** Hash of the key, right-shifted by BITS*depth. */
   private final int hash;
 
   /** Non-null value (exceptions: (1) empty map, (2) result of pivot, if not found). */
-  private final V value;
+  private final @Nullable V value;
 
   /** Bit mask indicating the children that are present (bitCount(mask) == children.length). */
   private final int mask;
@@ -125,6 +126,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
 
   /** Returns an empty map. */
   @SuppressWarnings("unchecked") // Empty immutable collection is safe to cast.
+  @CheckReturnValue
   public static <K, V> HamtPMap<K, V> empty() {
     return (HamtPMap<K, V>) EMPTY;
   }
@@ -136,6 +138,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
   }
 
   @Override
+  @CheckReturnValue
   public String toString() {
     StringBuilder sb = new StringBuilder().append("{");
     if (!isEmpty()) {
@@ -157,12 +160,14 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
 
   /** Returns whether this map is empty. */
   @Override
+  @CheckReturnValue
   public boolean isEmpty() {
     return key == null;
   }
 
   /** Returns an iterable for a (possibly null) tree. */
   @Override
+  @CheckReturnValue
   public Iterable<V> values() {
     if (isEmpty()) {
       return Collections.<V>emptyList();
@@ -172,6 +177,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
 
   /** Returns an iterable for a (possibly null) tree. */
   @Override
+  @CheckReturnValue
   public Iterable<K> keys() {
     if (isEmpty()) {
       return Collections.emptyList();
@@ -184,6 +190,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
    * present.
    */
   @Override
+  @CheckReturnValue
   public V get(K key) {
     return !isEmpty() ? get(key, hash(key)) : null;
   }
@@ -203,6 +210,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
    * this same map will be returned.
    */
   @Override
+  @CheckReturnValue
   public HamtPMap<K, V> plus(K key, V value) {
     checkNotNull(value);
 
@@ -258,6 +266,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
    * then this same map will be returned.
    */
   @Override
+  @CheckReturnValue
   public HamtPMap<K, V> minus(K key) {
     return !isEmpty() ? minus(key, hash(key), null) : this;
   }
@@ -266,7 +275,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
    * Internal recursive implementation of minus(K). The value of the removed node is returned via
    * the 'value' array, if it is non-null.
    */
-  private HamtPMap<K, V> minus(K key, int hash, V[] value) {
+  private HamtPMap<K, V> minus(K key, int hash, V @Nullable [] value) {
     if (hash == this.hash && key.equals(this.key)) {
       HamtPMap<K, V> result = deleteRoot(mask, children);
       if (value != null) {
@@ -294,6 +303,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
   }
 
   @Override
+  @CheckReturnValue
   public HamtPMap<K, V> reconcile(PMap<K, V> that, Reconciler<K, V> joiner) {
     HamtPMap<K, V> result =
         reconcile(
@@ -414,14 +424,14 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
     }
 
     if (t1.hash != t2.hash) {
-      // Due to our invariant, we can safely conclude that there's a discrepancy in the
-      // keys without any extra work.
+      // Due to the invariant that keys that are .equals must have the same hash code, we can
+      // safely conclude that there's a discrepancy in the keys without any extra work.
       return false;
     } else if (!t1.key.equals(t2.key)) {
       // Hash collision: try to rearrange t2 to have the same root as t1
       t2 = t2.pivot(t1.key, t1.hash);
-      if (t2.key == null) {
-        // t1.key not found in t2
+      if (t2.value == null) {
+        // pivot() returns a null 't2.value' when t1.key was not found in t2
         return false;
       }
     }
@@ -452,7 +462,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
    * Returns the child for the given bit, which must have exactly one bit set. Returns null if there
    * is no child for that bit.
    */
-  private HamtPMap<K, V> getChild(int bit) {
+  private @Nullable HamtPMap<K, V> getChild(int bit) {
     return (mask & bit) != 0 ? children[index(bit)] : null;
   }
 
@@ -494,7 +504,8 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
 
   /**
    * Returns a new version of this map with the given key at the root, and the root element moved to
-   * some deeper node. If the key is not found, then value will be null.
+   * some deeper node. If the key is not found in this map, then value will be null in the returned
+   * map.
    */
   @SuppressWarnings("unchecked")
   private HamtPMap<K, V> pivot(K key, int hash) {
@@ -502,10 +513,14 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
   }
 
   /**
-   * Internal recursive version of pivot. If parent is null then the result is used for the value in
-   * the returned map. The value, if found, is stored in the 'result' array as a secondary return.
+   * Internal recursive version of pivot.
+   *
+   * @param result an array of size 1. The value, if found, is stored in the 'result' array, as a
+   *     secondary return value. Otherwise the result array is unchanged.
+   * @return if parent is null, a map whose value is the value from the 'result' array (possibly
+   *     null) and that is rooted at 'key'. Otherwise, a map rooted at 'parent.key'.
    */
-  private HamtPMap<K, V> pivot(K key, int hash, HamtPMap<K, V> parent, V[] result) {
+  private HamtPMap<K, V> pivot(K key, int hash, @Nullable HamtPMap<K, V> parent, V[] result) {
     int newMask = mask;
     HamtPMap<K, V>[] newChildren = this.children;
     if (hash == this.hash && key.equals(this.key)) {
@@ -584,7 +599,7 @@ public final class HamtPMap<K, V> implements PMap<K, V>, Serializable {
    * Returns a new map with the elements from children. One element is removed from one of the
    * children and promoted to a root node. If there are no children, returns null.
    */
-  private static <K, V> HamtPMap<K, V> deleteRoot(int mask, HamtPMap<K, V>[] children) {
+  private static <K, V> @Nullable HamtPMap<K, V> deleteRoot(int mask, HamtPMap<K, V>[] children) {
     if (mask == 0) {
       return null;
     }

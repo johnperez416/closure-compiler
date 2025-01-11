@@ -46,13 +46,14 @@ import static com.google.javascript.jscomp.base.JSCompObjects.identical;
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.errorprone.annotations.ForOverride;
+import com.google.errorprone.annotations.InlineMe;
 import com.google.javascript.jscomp.base.Tri;
 import com.google.javascript.rhino.ErrorReporter;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Outcome;
 import com.google.javascript.rhino.jstype.EqualityChecker.EqMethod;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Represents JavaScript value types.
@@ -73,15 +74,16 @@ import javax.annotation.Nullable;
 public abstract class JSType {
   private static final long serialVersionUID = 1L;
 
-  private JSType resolveResult = null;
+  private @Nullable JSType resolveResult = null;
   protected TemplateTypeMap templateTypeMap;
   private boolean loosenTypecheckingDueToForwardReferencedSupertype;
 
   private boolean hashCodeInProgress = false;
 
   private boolean inTemplatedCheckVisit = false;
-  private static final CanCastToVisitor CAN_CAST_TO_VISITOR =
-      new CanCastToVisitor();
+  // Use "Boolean" as a 3-state value where not set is `null`.
+  private @Nullable Boolean templateCheckResult = null;
+  private static final CanCastToVisitor CAN_CAST_TO_VISITOR = new CanCastToVisitor();
 
   final JSTypeRegistry registry;
 
@@ -89,7 +91,7 @@ public abstract class JSType {
     this(registry, null);
   }
 
-  JSType(JSTypeRegistry registry, TemplateTypeMap templateTypeMap) {
+  JSType(JSTypeRegistry registry, @Nullable TemplateTypeMap templateTypeMap) {
     this.registry = registry;
 
     this.templateTypeMap =
@@ -277,6 +279,10 @@ public abstract class JSType {
     return false;
   }
 
+  public boolean isReadonlyArrayType() {
+    return false;
+  }
+
   public boolean isBooleanObjectType() {
     return false;
   }
@@ -427,7 +433,7 @@ public abstract class JSType {
 
   /** Null-safe version of toMaybeFunctionType(). */
   @SuppressWarnings("AmbiguousMethodReference")
-  public static FunctionType toMaybeFunctionType(JSType type) {
+  public static @Nullable FunctionType toMaybeFunctionType(JSType type) {
     return type == null ? null : type.toMaybeFunctionType();
   }
 
@@ -435,7 +441,7 @@ public abstract class JSType {
     return toMaybeEnumElementType() != null;
   }
 
-  public final JSType getEnumeratedTypeOfEnumElement() {
+  public final @Nullable JSType getEnumeratedTypeOfEnumElement() {
     EnumElementType e = toMaybeEnumElementType();
     return e == null ? null : e.getPrimitiveType();
   }
@@ -507,15 +513,25 @@ public abstract class JSType {
   }
 
   public boolean hasAnyTemplateTypes() {
-    if (!this.inTemplatedCheckVisit) {
-      this.inTemplatedCheckVisit = true;
-      boolean result = hasAnyTemplateTypesInternal();
-      this.inTemplatedCheckVisit = false;
-      return result;
-    } else {
+    // If the result has been cached use that.
+    if (this.templateCheckResult != null) {
+      return templateCheckResult;
+    }
+
+    if (this.inTemplatedCheckVisit) {
       // prevent infinite recursion, this is "not yet".
       return false;
     }
+
+    this.inTemplatedCheckVisit = true;
+    boolean result = hasAnyTemplateTypesInternal();
+    this.inTemplatedCheckVisit = false;
+
+    // Cache the result if the type has been resolved.
+    if (this.isResolved()) {
+      templateCheckResult = result;
+    }
+    return result;
   }
 
   boolean hasAnyTemplateTypesInternal() {
@@ -787,8 +803,7 @@ public abstract class JSType {
    * @return The property's type. {@code null} if the current type cannot have properties, or if the
    *     type is not found.
    */
-  @Nullable
-  public final JSType findPropertyType(String propertyName) {
+  public final @Nullable JSType findPropertyType(String propertyName) {
     @Nullable JSType propertyType = findPropertyTypeWithoutConsideringTemplateTypes(propertyName);
     if (propertyType == null) {
       return null;
@@ -815,8 +830,7 @@ public abstract class JSType {
    * need to lookup a property on a random JSType
    */
   @ForOverride
-  @Nullable
-  protected JSType findPropertyTypeWithoutConsideringTemplateTypes(String propertyName) {
+  protected @Nullable JSType findPropertyTypeWithoutConsideringTemplateTypes(String propertyName) {
     ObjectType autoboxObjType = ObjectType.cast(autoboxesTo());
     if (autoboxObjType != null) {
       return autoboxObjType.findPropertyType(propertyName);
@@ -859,12 +873,11 @@ public abstract class JSType {
   }
 
   /**
-   * Casts this to an ObjectType, or returns null if this is not an ObjectType.
-   * If this is a scalar type, it will *not* be converted to an object type.
-   * If you want to simulate JS autoboxing or dereferencing, you should use
-   * autoboxesTo() or dereference().
+   * Casts this to an ObjectType, or returns null if this is not an ObjectType. If this is a scalar
+   * type, it will *not* be converted to an object type. If you want to simulate JS autoboxing or
+   * dereferencing, you should use autoboxesTo() or dereference().
    */
-  public ObjectType toObjectType() {
+  public @Nullable ObjectType toObjectType() {
     return this instanceof ObjectType ? (ObjectType) this : null;
   }
 
@@ -883,11 +896,10 @@ public abstract class JSType {
   /**
    * Dereferences a type for property access.
    *
-   * Filters null/undefined, autoboxes the resulting type, and returns it
-   * iff it's an object. If not an object, returns null.
+   * <p>Filters null/undefined, autoboxes the resulting type, and returns it iff it's an object. If
+   * not an object, returns null.
    */
-  @Nullable
-  public final ObjectType dereference() {
+  public final @Nullable ObjectType dereference() {
     return autobox().toObjectType();
   }
 
@@ -918,7 +930,7 @@ public abstract class JSType {
     return testForEqualityHelper(this, that);
   }
 
-  final Tri testForEqualityHelper(JSType aType, JSType bType) {
+  final @Nullable Tri testForEqualityHelper(JSType aType, JSType bType) {
     if (bType.isAllType() || bType.isUnknownType() ||
         bType.isNoResolvedType() ||
         aType.isAllType() || aType.isUnknownType() ||
@@ -1052,7 +1064,6 @@ public abstract class JSType {
       return this;
     }
 
-    that = filterNoResolvedType(that);
     if (that.isUnionType()) {
       // Union types have their own implementation of getLeastSupertype.
       return that.toMaybeUnionType().getLeastSupertype(this);
@@ -1067,9 +1078,7 @@ public abstract class JSType {
   @SuppressWarnings("AmbiguousMethodReference")
   static JSType getLeastSupertype(JSType thisType, JSType thatType) {
     boolean areEquivalent = thisType.equals(thatType);
-    return areEquivalent ? thisType :
-        filterNoResolvedType(
-            thisType.registry.createUnionType(thisType, thatType));
+    return areEquivalent ? thisType : thisType.registry.createUnionType(thisType, thatType);
   }
 
   /**
@@ -1131,10 +1140,18 @@ public abstract class JSType {
     }  else if (thatType.isTemplatizedType()) {
       return thatType.toMaybeTemplatizedType().getGreatestSubtypeHelper(
           thisType);
+    } else if (thisType.isNoResolvedType() && thatType.isNoResolvedType()) {
+      // NoResolvedType has some strange semantics: "isSubtypeOf(otherType)" always returns true,
+      // to avoid type mismatch errors on assignments, but registry.createUnionType() also preserves
+      // all NoResolvedTypes in unions with other types instead of dropping them as irrelevant, so
+      // that Clutz & conformance checks can see all NoResolvedTypes later on.
+      // For the purposes of computing the "greatest common subtype" of two types, use the
+      // registry.createUnionType semantics rather than the .isSubtypeOf semantics.
+      return thisType.registry.createUnionType(thisType, thatType);
     } else if (thisType.isSubtypeOf(thatType)) {
-      return filterNoResolvedType(thisType);
+      return thisType;
     } else if (thatType.isSubtypeOf(thisType)) {
-      return filterNoResolvedType(thatType);
+      return thatType;
     } else if (thisType.isRecordType()) {
       return thisType.toMaybeRecordType().getGreatestSubtypeHelper(thatType);
     } else if (thatType.isRecordType()) {
@@ -1157,47 +1174,6 @@ public abstract class JSType {
       return thisType.getNativeType(JSTypeNative.NO_OBJECT_TYPE);
     }
     return thisType.getNativeType(JSTypeNative.NO_TYPE);
-  }
-
-  /**
-   * When computing infima, we may get a situation like
-   * inf(Type1, Type2)
-   * where both types are unresolved, so they're technically
-   * subtypes of one another.
-   *
-   * If this happens, filter them down to NoResolvedType.
-   */
-  static JSType filterNoResolvedType(JSType type) {
-    if (type.isNoResolvedType()) {
-      // inf(UnresolvedType1, UnresolvedType2) needs to resolve
-      // to the base unresolved type, so that the relation is symmetric.
-      return type.getNativeType(JSTypeNative.NO_RESOLVED_TYPE);
-    } else if (type.isUnionType()) {
-      UnionType unionType = type.toMaybeUnionType();
-      boolean needsFiltering = false;
-      ImmutableList<JSType> alternatesList = unionType.getAlternates();
-      for (int i = 0; i < alternatesList.size(); i++) {
-        JSType alt = alternatesList.get(i);
-        if (alt.isNoResolvedType()) {
-          needsFiltering = true;
-          break;
-        }
-      }
-
-      if (needsFiltering) {
-        UnionType.Builder builder =
-            UnionType.builder(type.registry)
-                .addAlternate(type.getNativeType(JSTypeNative.NO_RESOLVED_TYPE));
-        for (int i = 0; i < alternatesList.size(); i++) {
-          JSType alt = alternatesList.get(i);
-          if (!alt.isNoResolvedType()) {
-            builder.addAlternate(alt);
-          }
-        }
-        return builder.build();
-      }
-    }
-    return type;
   }
 
   /**
@@ -1364,7 +1340,7 @@ public abstract class JSType {
     return this.isNullType() || this.isVoidType();
   }
 
-  public Iterable<JSType> getUnionMembers() {
+  public @Nullable Iterable<JSType> getUnionMembers() {
     return isUnionType() ? this.toMaybeUnionType().getAlternates() : null;
   }
 
@@ -1441,7 +1417,10 @@ public abstract class JSType {
     return this.isSubtypeOf(supertype);
   }
 
-  /** @deprecated Prefer {@link #isSubtype(JSType)} instead. */
+  /**
+   * @deprecated Prefer {@link #isSubtype(JSType)} instead.
+   */
+  @InlineMe(replacement = "this.isSubtypeOf(supertype, mode)")
   @Deprecated
   public final boolean isSubtype(JSType supertype, SubtypingMode mode) {
     return this.isSubtypeOf(supertype, mode);
@@ -1455,7 +1434,6 @@ public abstract class JSType {
         .setSubtypingMode(SubtypingMode.NORMAL)
         .check();
   }
-
 
   public final boolean isSubtypeOf(JSType supertype, SubtypingMode mode) {
     return new SubtypeChecker(this.registry)
@@ -1494,7 +1472,7 @@ public abstract class JSType {
   public final JSType resolve(ErrorReporter reporter) {
     registry.getResolver().assertLegalToResolveTypes();
     if (!this.isResolved()) {
-      /**
+      /*
        * Prevent infinite recursion in cyclically defined types.
        *
        * <p>If resolve is called a twice on a type, before the first call completes, there is a
@@ -1545,10 +1523,10 @@ public abstract class JSType {
 
   /**
    * A null-safe resolve.
+   *
    * @see #resolve
    */
-  static final JSType safeResolve(
-      JSType type, ErrorReporter reporter) {
+  static final @Nullable JSType safeResolve(JSType type, ErrorReporter reporter) {
     return type == null ? null : type.resolve(reporter);
   }
 
@@ -1567,7 +1545,7 @@ public abstract class JSType {
     public final JSType typeA;
     public final JSType typeB;
 
-    public TypePair(JSType typeA, JSType typeB) {
+    public TypePair(@Nullable JSType typeA, @Nullable JSType typeB) {
       this.typeA = typeA;
       this.typeB = typeB;
     }
@@ -1608,10 +1586,9 @@ public abstract class JSType {
   /**
    * Modify this type so that it matches the specified type.
    *
-   * This is useful for reverse type-inference, where we want to
-   * infer that an object literal matches its constraint (much like
-   * how the java compiler does reverse-inference to figure out generics).
-   * @param constraint
+   * <p>This is useful for reverse type-inference, where we want to infer that an object literal
+   * matches its constraint (much like how the java compiler does reverse-inference to figure out
+   * generics).
    */
   public void matchConstraint(JSType constraint) {}
 

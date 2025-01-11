@@ -17,7 +17,6 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
@@ -26,7 +25,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -39,7 +37,6 @@ import java.util.zip.ZipFile;
  * a timestamp controlled caching which ensures we always read up-to-date zip while avoiding wasting
  * time by re-reading the zip for each entry.
  */
-@GwtIncompatible("java.util.zip.ZipFile")
 final class JSCompZipFileCache {
 
   /**
@@ -69,7 +66,7 @@ final class JSCompZipFileCache {
           .build(
               new CacheLoader<String, CachedZipFile>() {
                 @Override
-                public CachedZipFile load(String key) throws IOException {
+                public CachedZipFile load(String key) {
                   return new CachedZipFile(key);
                 }
               });
@@ -80,7 +77,7 @@ final class JSCompZipFileCache {
     private volatile FileTime lastModified;
 
     private CachedZipFile(String zipName) {
-      this.path = Paths.get(zipName);
+      this.path = Path.of(zipName);
     }
 
     InputStream getEntryStream(String entryName) throws IOException {

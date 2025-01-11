@@ -25,6 +25,7 @@ import com.google.errorprone.annotations.DoNotCall;
 import com.google.javascript.jscomp.colors.Color;
 import java.util.BitSet;
 import java.util.LinkedHashMap;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A struct representing a {@link Color} for use in ambiguation.
@@ -75,7 +76,7 @@ final class ColorGraphNode {
     return new ColorGraphNode(null, index);
   }
 
-  private ColorGraphNode(Color single, int index) {
+  private ColorGraphNode(@Nullable Color single, int index) {
     this.index = index;
     this.color = single;
   }
@@ -105,9 +106,15 @@ final class ColorGraphNode {
   @Override
   @DoNotCall // For debugging only.
   public String toString() {
+    // Just report a few important properties of color instead of the whole thing.
+    // The string generated here will become the label of the `.dot` graph node
+    // if this graph is logged for debugging. Including the entire color, recursively
+    // includes all the colors it extends also, making the labels unmanageably long
+    // to display and repeating information available from other nodes.
     return MoreObjects.toStringHelper(this)
         .add("index", this.index)
-        .add("color", this.color)
+        .add("color.id", this.color.getId())
+        .add("color.ownProperties", this.color.getOwnProperties())
         .toString();
   }
 }

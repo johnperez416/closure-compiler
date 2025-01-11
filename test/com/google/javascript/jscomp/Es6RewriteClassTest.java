@@ -16,16 +16,13 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.jscomp.Es6RewriteClass.DYNAMIC_EXTENDS_TYPE;
-import static com.google.javascript.jscomp.Es6ToEs3Util.CANNOT_CONVERT_YET;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES2015_MODULES;
+import static com.google.javascript.jscomp.TranspilationUtil.CANNOT_CONVERT_YET;
+import static com.google.javascript.jscomp.TypedScopeCreator.DYNAMIC_EXTENDS_WITHOUT_JSDOC;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.colors.Color;
 import com.google.javascript.jscomp.colors.StandardColors;
-import com.google.javascript.jscomp.serialization.ConvertTypesToColors;
-import com.google.javascript.jscomp.serialization.SerializationOptions;
 import com.google.javascript.jscomp.testing.NoninjectingCompiler;
 import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
@@ -55,38 +52,30 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     super(EXTERNS_BASE);
   }
 
-  @Override
   @Before
-  public void setUp() throws Exception {
-    super.setUp();
+  public void customSetUp() throws Exception {
+    enableNormalize();
     setAcceptedLanguage(LanguageMode.ECMASCRIPT_2015);
     setLanguageOut(LanguageMode.ECMASCRIPT3);
     enableTypeCheck();
     enableTypeInfoValidation();
     enableScriptFeatureValidation();
+    replaceTypesWithColors();
+    enableMultistageCompilation();
   }
 
   private static PassFactory makePassFactory(
       String name, Function<AbstractCompiler, CompilerPass> pass) {
-    return PassFactory.builder()
-        .setName(name)
-        .setInternalFactory(pass)
-        .setFeatureSet(ES2015_MODULES)
-        .build();
+    return PassFactory.builder().setName(name).setInternalFactory(pass).build();
   }
 
   @Override
   protected CompilerPass getProcessor(final Compiler compiler) {
     PhaseOptimizer optimizer = new PhaseOptimizer(compiler, null);
-    optimizer.addOneTimePass(makePassFactory("es6ConvertSuper", Es6ConvertSuper::new));
-    // TODO(b/191386936): remove this and add `replaceTypesWithColors()` once Es6ConvertSuper is
-    // moved into optimizations.
-    optimizer.addOneTimePass(makePassFactory("removeCastNodes", RemoveCastNodes::new));
     optimizer.addOneTimePass(
         makePassFactory(
-            "convertTypesToColors",
-            (currCompiler) ->
-                new ConvertTypesToColors(currCompiler, SerializationOptions.INCLUDE_DEBUG_INFO)));
+            "es6RewriteClassExtendsExpressions", Es6RewriteClassExtendsExpressions::new));
+    optimizer.addOneTimePass(makePassFactory("es6ConvertSuper", Es6ConvertSuper::new));
     optimizer.addOneTimePass(makePassFactory("es6ExtractClasses", Es6ExtractClasses::new));
     optimizer.addOneTimePass(makePassFactory("es6RewriteClass", Es6RewriteClass::new));
     return optimizer;
@@ -214,7 +203,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "if (true) {", //
             "  class Foo{}",
             "} else {",
-            "  class Foo{}",
+            "  class FooBar{}",
             "}"),
         lines(
             "if (true) {",
@@ -222,7 +211,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "   let Foo = function() {};",
             "} else {",
             "   /** @constructor */",
-            "   let Foo = function() {};",
+            "   let FooBar = function() {};",
             "}"));
   }
 
@@ -552,6 +541,16 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
   }
 
   @Test
+  public void testClassExpressionInDefaultParamValue_canConvert() {
+    test(
+        "function bar(foo = class { }) {};",
+        lines(
+            "function bar(foo = (() => {",
+            "  /** @constructor */ const testcode$classdecl$var0 = function() {};",
+            "  return testcode$classdecl$var0; })()) {};"));
+  }
+
+  @Test
   public void testExtendsWithImplicitConstructor() {
     test(
         "class D {} class C extends D {}",
@@ -639,14 +638,14 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
   public void testExtendsWithExplicitSuperCallWithArguments() {
     test(
         lines(
-            "class D { constructor(str) {} }",
-            "class C extends D { constructor(str) { super(str); } }"),
+            "class D { constructor(strArg) {} }",
+            "class C extends D { constructor(word) { super(word); } }"),
         lines(
             "/** @constructor */",
-            "let D = function(str) {};",
+            "let D = function(strArg) {};",
             "/** @constructor */",
-            "let C = function(str) { ",
-            "  D.call(this, str);",
+            "let C = function(word) { ",
+            "  D.call(this, word);",
             "}",
             "$jscomp.inherits(C, D);"));
   }
@@ -757,10 +756,11 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "/** @constructor",
             " */",
             "let C = function() {",
-            "  var $jscomp$tmp$error;",
-            "  $jscomp$tmp$error = Error.apply(this, arguments),",
-            "      this.message = $jscomp$tmp$error.message,",
-            "      ('stack' in $jscomp$tmp$error) && (this.stack = $jscomp$tmp$error.stack),",
+            "  var $jscomp$tmp$error$m1146332801$1;",
+            "  $jscomp$tmp$error$m1146332801$1 = Error.apply(this, arguments),",
+            "      this.message = $jscomp$tmp$error$m1146332801$1.message,",
+            "      ('stack' in $jscomp$tmp$error$m1146332801$1) && (this.stack ="
+                + " $jscomp$tmp$error$m1146332801$1.stack),",
             "      this;",
             "};",
             "$jscomp.inherits(C, Error);"));
@@ -775,10 +775,11 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "/** @constructor",
             " */",
             "let C = function() {",
-            "  var $jscomp$tmp$error;",
-            "  $jscomp$tmp$error = AggregateError.apply(this, arguments),",
-            "      this.message = $jscomp$tmp$error.message,",
-            "      ('stack' in $jscomp$tmp$error) && (this.stack = $jscomp$tmp$error.stack),",
+            "  var $jscomp$tmp$error$m1146332801$1;",
+            "  $jscomp$tmp$error$m1146332801$1 = AggregateError.apply(this, arguments),",
+            "      this.message = $jscomp$tmp$error$m1146332801$1.message,",
+            "      ('stack' in $jscomp$tmp$error$m1146332801$1) && (this.stack ="
+                + " $jscomp$tmp$error$m1146332801$1.stack),",
             "      this;",
             "};",
             "$jscomp.inherits(C, AggregateError);"));
@@ -799,11 +800,12 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "/** @constructor",
             " */",
             "let C = function() {",
-            "  var $jscomp$tmp$error;",
+            "  var $jscomp$tmp$error$m1146332801$1;",
             "  var self =",
-            "      ($jscomp$tmp$error = Error.call(this, 'C error'),",
-            "          this.message = $jscomp$tmp$error.message,",
-            "          ('stack' in $jscomp$tmp$error) && (this.stack = $jscomp$tmp$error.stack),",
+            "      ($jscomp$tmp$error$m1146332801$1 = Error.call(this, 'C error'),",
+            "          this.message = $jscomp$tmp$error$m1146332801$1.message,",
+            "          ('stack' in $jscomp$tmp$error$m1146332801$1) && (this.stack ="
+                + " $jscomp$tmp$error$m1146332801$1.stack),",
             "          this)",
             "      || this;",
             "};",
@@ -826,11 +828,13 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "/** @constructor",
             " */",
             "let C = function() {",
-            "  var $jscomp$tmp$error;",
+            "  var $jscomp$tmp$error$m1146332801$1;",
             "  var self =",
-            "      ($jscomp$tmp$error = AggregateError.call(this, [new Error('msg')]),",
-            "          this.message = $jscomp$tmp$error.message,",
-            "          ('stack' in $jscomp$tmp$error) && (this.stack = $jscomp$tmp$error.stack),",
+            "      ($jscomp$tmp$error$m1146332801$1 = AggregateError.call(this, [new"
+                + " Error('msg')]),",
+            "          this.message = $jscomp$tmp$error$m1146332801$1.message,",
+            "          ('stack' in $jscomp$tmp$error$m1146332801$1) && (this.stack ="
+                + " $jscomp$tmp$error$m1146332801$1.stack),",
             "          this)",
             "      || this;",
             "};",
@@ -838,18 +842,52 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
   }
 
   @Test
-  public void testInvalidExtends_call() {
-    testError("class C extends foo() {}", DYNAMIC_EXTENDS_TYPE);
+  public void testDynamicExtends_callWithoutJSDoc() {
+    testWarning("class C extends foo() {}", DYNAMIC_EXTENDS_WITHOUT_JSDOC);
   }
 
   @Test
-  public void testInvalidExtends_functionExpression() {
-    testError("class C extends function(){} {}", DYNAMIC_EXTENDS_TYPE);
+  public void testDynamicExtends_callWithJSDoc() {
+    test(
+        "/** @extends {Object} */ class C extends foo() {}",
+        lines(
+            "const testcode$classextends$var0 = foo();",
+            "/** @constructor */",
+            "let C = function() {",
+            "  return testcode$classextends$var0.apply(this, arguments) || this;",
+            "};",
+            "$jscomp.inherits(C, testcode$classextends$var0);"));
   }
 
   @Test
-  public void testInvalidExtends_logicalExpression() {
-    testError("class A {}; class B {}; class C extends (foo ? A : B) {}", DYNAMIC_EXTENDS_TYPE);
+  public void testDynamicExtends_functionExpression_suppressCheckTypes() {
+    test(
+        "/** @suppress {checkTypes} */ class C extends function(){} {}",
+        lines(
+            "const testcode$classextends$var0 = function() {};",
+            "/** @constructor */",
+            "let C = function() {",
+            "  testcode$classextends$var0.apply(this, arguments);",
+            "};",
+            "$jscomp.inherits(C, testcode$classextends$var0);"));
+  }
+
+  @Test
+  public void testDynamicExtends_logicalExpressionWithJSDoc() {
+    test(
+        "class A {} class B {} /** @extends {Object} */ class C extends (foo ? A : B) {}",
+        lines(
+            "/** @constructor */",
+            "let A = function() {};",
+            "/** @constructor */",
+            "let B = function() {};",
+            "const testcode$classextends$var0 = foo ? A : B;",
+            "",
+            "/** @constructor */",
+            "let C = function() {",
+            "  testcode$classextends$var0.apply(this, arguments);",
+            "};",
+            "$jscomp.inherits(C, testcode$classextends$var0);"));
   }
 
   @Test
@@ -931,7 +969,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "let D = function() {};",
             "/** @constructor */",
             "let C = function() {",
-            "  SUPER: D.call(this);",
+            "  SUPER: { D.call(this); }",
             "}",
             "$jscomp.inherits(C, D);"));
 
@@ -939,7 +977,8 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     Color cType = getNodeWithName(getLastCompiler().getJsRoot(), "C").getColor();
 
     // D.call(this);
-    Node callNode = getNodeMatchingLabel(getLastCompiler().getJsRoot(), "SUPER").getOnlyChild();
+    Node callNode =
+        getNodeMatchingLabel(getLastCompiler().getJsRoot(), "SUPER").getOnlyChild().getOnlyChild();
     assertNode(callNode).hasToken(Token.CALL);
     assertNode(callNode).hasColorThat().isEqualTo(StandardColors.NULL_OR_VOID);
 
@@ -963,13 +1002,13 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
   public void testSuperCall_withArgument() {
     ignoreWarnings(TypeCheck.WRONG_ARGUMENT_COUNT);
     test(
-        "class D {} class C extends D { constructor(str) { super(str); } }",
+        "class D {} class C extends D { constructor(string) { super(string); } }",
         lines(
             "/** @constructor */",
             "let D = function() {}",
             "/** @constructor */",
-            "let C = function(str) {",
-            "  D.call(this,str);",
+            "let C = function(string) {",
+            "  D.call(this,string);",
             "}",
             "$jscomp.inherits(C, D);"));
   }
@@ -978,13 +1017,13 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
   public void testSuperCall_withArgumentAndSubsequentCode() {
     ignoreWarnings(TypeCheck.WRONG_ARGUMENT_COUNT);
     test(
-        "class D {} class C extends D { constructor(str, n) { super(str); this.n = n; } }",
+        "class D {} class C extends D { constructor(strArg, n) { super(strArg); this.n = n; } }",
         lines(
             "/** @constructor */",
             "let D = function() {}",
             "/** @constructor */",
-            "let C = function(str, n) {",
-            "  D.call(this,str);",
+            "let C = function(strArg, n) {",
+            "  D.call(this,strArg);",
             "  this.n = n;",
             "}",
             "$jscomp.inherits(C, D);"));
@@ -1053,21 +1092,21 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     test(
         lines(
             "class D {",
-            "  /** @param {string} str */",
-            "  constructor(str) {",
-            "    this.str = str;",
+            "  /** @param {string} word */",
+            "  constructor(word) {",
+            "    this.str = word;",
             "    /** @type {?} */ this.n;",
             "    return;", // Empty return should not trigger this-changing behavior.
             "  }",
             "}",
             "class C extends D {",
             "  /**",
-            "   * @param {string} str",
+            "   * @param {string} strArg",
             "   * @param {number} n",
             "   */",
-            "  constructor(str, n) {",
+            "  constructor(strArg, n) {",
             // This is nuts, but confirms that super() used in an expression works.
-            "    super(str).n = n;",
+            "    super(strArg).n = n;",
             // Also confirm that an existing empty return is handled correctly.
             "    return;",
             "  }",
@@ -1076,16 +1115,16 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "/**",
             " * @constructor",
             " */",
-            "let D = function(str) {",
-            "  this.str = str;",
+            "let D = function(word) {",
+            "  this.str = word;",
             "  this.n;",
             "  return;",
             "}",
             "/**",
             " * @constructor",
             " */",
-            "let C = function(str, n) {",
-            "  (D.call(this,str), this).n = n;", // super() returns `this`.
+            "let C = function(strArg, n) {",
+            "  (D.call(this,strArg), this).n = n;", // super() returns `this`.
             "  return;",
             "}",
             "$jscomp.inherits(C, D);"));
@@ -1100,9 +1139,9 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
         lines(
             "goog.forwardDeclare('D');",
             "class C extends D {",
-            "  constructor(str, n) {",
+            "  constructor(strArg, n) {",
             // This is nuts, but confirms that super() used in an expression works.
-            "    super(str).n = n;",
+            "    super(strArg).n = n;",
             // Also confirm that an existing empty return is handled correctly.
             "    return;",
             "  }",
@@ -1110,11 +1149,12 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
         lines(
             "goog.forwardDeclare('D');",
             "/** @constructor */",
-            "let C = function(str, n) {",
-            "  var $jscomp$super$this;",
-            "  ($jscomp$super$this = D.call(this,str) || this).n = n;",
-            "  return $jscomp$super$this;", // Duplicate because of existing return statement.
-            "  return $jscomp$super$this;",
+            "let C = function(strArg, n) {",
+            "  var $jscomp$super$this$m1146332801$0;",
+            "  ($jscomp$super$this$m1146332801$0 = D.call(this,strArg) || this).n = n;",
+            "  return $jscomp$super$this$m1146332801$0;", // Duplicate because of existing return
+            // statement.
+            "  return $jscomp$super$this$m1146332801$0;",
             "}",
             "$jscomp.inherits(C, D);"));
   }
@@ -1124,34 +1164,34 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     test(
         lines(
             "class D {",
-            "  /** @param {string} name */",
-            "  constructor(name) {",
-            "    this.name = name;",
+            "  /** @param {string} nameStr */",
+            "  constructor(nameStr) {",
+            "    this.name = nameStr;",
             "  }",
             "}",
             "class C extends D {",
-            "  /** @param {string} str",
+            "  /** @param {string} strArg",
             "   * @param {number} n */",
-            "  constructor(str, n) {",
+            "  constructor(strArg, n) {",
             "    if (n >= 0) {",
-            "      super('positive: ' + str);",
+            "      super('positive: ' + strArg);",
             "    } else {",
-            "      super('negative: ' + str);",
+            "      super('negative: ' + strArg);",
             "    }",
             "    this.n = n;",
             "  }",
             "}"),
         lines(
             "/** @constructor */",
-            "let D = function(name) {",
-            "  this.name = name;",
+            "let D = function(nameStr) {",
+            "  this.name = nameStr;",
             "}",
             "/** @constructor */",
-            "let C = function(str, n) {",
+            "let C = function(strArg, n) {",
             "  if (n >= 0) {",
-            "    D.call(this, 'positive: ' + str);",
+            "    D.call(this, 'positive: ' + strArg);",
             "  } else {",
-            "    D.call(this, 'negative: ' + str);",
+            "    D.call(this, 'negative: ' + strArg);",
             "  }",
             "  this.n = n;",
             "}",
@@ -1167,13 +1207,13 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
         lines(
             "goog.forwardDeclare('D');",
             "class C extends D {",
-            "  /** @param {string} str",
+            "  /** @param {string} strArg",
             "   * @param {number} n */",
-            "  constructor(str, n) {",
+            "  constructor(strArg, n) {",
             "    if (n >= 0) {",
-            "      super('positive: ' + str);",
+            "      super('positive: ' + strArg);",
             "    } else {",
-            "      super('negative: ' + str);",
+            "      super('negative: ' + strArg);",
             "    }",
             "    this.n = n;",
             "  }",
@@ -1181,15 +1221,15 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
         lines(
             "goog.forwardDeclare('D');",
             "/** @constructor */",
-            "let C = function(str, n) {",
-            "  var $jscomp$super$this;",
+            "let C = function(strArg, n) {",
+            "  var $jscomp$super$this$m1146332801$0;",
             "  if (n >= 0) {",
-            "    $jscomp$super$this = D.call(this, 'positive: ' + str) || this;",
+            "    $jscomp$super$this$m1146332801$0 = D.call(this, 'positive: ' + strArg) || this;",
             "  } else {",
-            "    $jscomp$super$this = D.call(this, 'negative: ' + str) || this;",
+            "    $jscomp$super$this$m1146332801$0 = D.call(this, 'negative: ' + strArg) || this;",
             "  }",
-            "  $jscomp$super$this.n = n;",
-            "  return $jscomp$super$this;",
+            "  $jscomp$super$this$m1146332801$0.n = n;",
+            "  return $jscomp$super$this$m1146332801$0;",
             "}",
             "$jscomp.inherits(C, D);"));
   }
@@ -1217,7 +1257,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "let Bar = function() { Foo.apply(this, arguments); };",
             "$jscomp.inherits(Bar, Foo);",
             "Bar.prototype['m'] = function () {",
-            "  RETURN: return Foo.prototype['m'].call(this) + 1;",
+            "  RETURN: { return Foo.prototype['m'].call(this) + 1; }",
             "};"));
 
     Color fooType = getNodeWithName(getLastCompiler().getJsRoot(), "Foo").getColor();
@@ -1225,7 +1265,9 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
 
     // Foo.prototype['m'].call(this)
     Node callNode =
-        getNodeMatchingLabel(getLastCompiler().getJsRoot(), "RETURN").getFirstFirstChild();
+        getNodeMatchingLabel(getLastCompiler().getJsRoot(), "RETURN")
+            .getFirstFirstChild()
+            .getFirstChild();
     assertNode(callNode).hasToken(Token.CALL);
     assertNode(callNode).hasColorThat().isEqualTo(StandardColors.UNKNOWN);
 
@@ -1352,7 +1394,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "    super();",
             "  }",
             "",
-            "  set x(value) {",
+            "  set x(num) {",
             "    super.method();",
             "  }",
             "}"),
@@ -1369,7 +1411,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "  x: {",
             "    configurable:true,",
             "    enumerable:true,",
-            "    set: function(value) { Base.prototype.method.call(this); },",
+            "    set: function(num) { Base.prototype.method.call(this); }",
             "  }",
             "});"));
   }
@@ -1382,8 +1424,8 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
         lines(
             "class FooPromise extends Promise {",
             "  /** @param {string} msg */",
-            "  constructor(callback, msg) {",
-            "    super(callback);",
+            "  constructor(callbackArg, msg) {",
+            "    super(callbackArg);",
             "    this.msg = msg;",
             "  }",
             "}"),
@@ -1391,11 +1433,42 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "/**",
             " * @constructor",
             " */",
-            "let FooPromise = function(callback, msg) {",
-            "  var $jscomp$super$this;",
-            "  $jscomp$super$this = $jscomp.construct(Promise, [callback], this.constructor)",
-            "  $jscomp$super$this.msg = msg;",
-            "  return $jscomp$super$this;",
+            "let FooPromise = function(callbackArg, msg) {",
+            "  var $jscomp$super$this$m1146332801$0;",
+            "  $jscomp$super$this$m1146332801$0 = $jscomp.construct(Promise, [callbackArg],"
+                + " this.constructor)",
+            "  $jscomp$super$this$m1146332801$0.msg = msg;",
+            "  return $jscomp$super$this$m1146332801$0;",
+            "}",
+            "$jscomp.inherits(FooPromise, Promise);",
+            ""));
+  }
+
+  @Test
+  public void testExtendNativeClass_withExplicitConstructor_withInnerFunction() {
+    test(
+        lines(
+            "class FooPromise extends Promise {",
+            "  /** @param {string} msg */",
+            "  constructor(callbackArg, msg) {",
+            "    function inner() {}", // hoisted, normalized
+            "    super(callbackArg);",
+            "    this.msg = msg;",
+            "  }",
+            "}"),
+        lines(
+            "/**",
+            " * @constructor",
+            " */",
+            "let FooPromise = function(callbackArg, msg) {",
+            // stays hoisted
+            "  function inner() {}",
+            // declaration created after function declaration
+            "  var $jscomp$super$this$m1146332801$0;",
+            "  $jscomp$super$this$m1146332801$0 =",
+            "      $jscomp.construct(Promise, [callbackArg], this.constructor);",
+            "  $jscomp$super$this$m1146332801$0.msg = msg;",
+            "  return $jscomp$super$this$m1146332801$0;",
             "}",
             "$jscomp.inherits(FooPromise, Promise);",
             ""));
@@ -2140,7 +2213,9 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "});"));
   }
 
-  /** @bug 20536614 */
+  /**
+   * @bug 20536614
+   */
   @Test
   public void testStaticGetter() {
     setLanguageOut(LanguageMode.ECMASCRIPT5);
@@ -2474,6 +2549,10 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     Node sourceCName = getNodeWithName(sourceRoot, "C");
     Node sourceClass = sourceCName.getParent();
 
+    // Multistage compilation does not preserve length in the actual output, so remove it from the
+    // expected output as well.
+    removeLengthFromSubtree(sourceRoot);
+
     // `C` from `let C = function() {};` matches `C` from `class C { }`
     Node expectedCName = getNodeWithName(expectedRoot, "C");
     assertNode(expectedCName).matchesQualifiedName("C").hasEqualSourceInfoTo(sourceCName);
@@ -2498,6 +2577,10 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     // `constructor() {}`
     Node sourceConstructorFunction = getNodeWithName(sourceRoot, "constructor").getOnlyChild();
     assertNode(sourceConstructorFunction).hasToken(Token.FUNCTION);
+
+    // Multistage compilation does not preserve length in the actual output, so remove it from the
+    // expected output as well.
+    removeLengthFromSubtree(sourceRoot);
 
     // `C` from `let C = function() {};` matches `C` from `class C {`
     Node expectedCName = getNodeWithName(expectedRoot, "C");
@@ -2526,6 +2609,10 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     Node sourceMethodMemberDef = getNodeWithName(sourceRoot, "method");
     // The FUNCTION node for `method() {}`
     Node sourceMethodFunction = sourceMethodMemberDef.getOnlyChild();
+
+    // Multistage compilation does not preserve length in the actual output, so remove it from the
+    // expected output as well.
+    removeLengthFromSubtree(sourceRoot);
 
     // `C.prototype.method` has source info matching `method`
     Node cPrototypeMethod = getNodeWithName(expectedRoot, "method");
@@ -2563,7 +2650,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "let D = function() {};",
             "/** @constructor */",
             "let C = function() {",
-            "  SUPER: D.call(this);",
+            "  SUPER: { D.call(this); }",
             "}",
             "$jscomp.inherits(C, D);");
 
@@ -2577,8 +2664,12 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     Node sourceSuper = sourceSuperCall.getFirstChild();
     assertNode(sourceSuper).hasToken(Token.SUPER);
 
+    // Multistage compilation does not preserve length in the actual output, so remove it from the
+    // expected output as well.
+    removeLengthFromSubtree(sourceRoot);
+
     // D.call(this); has the position and length of `super()`
-    Node callNode = getNodeMatchingLabel(expectedRoot, "SUPER").getOnlyChild();
+    Node callNode = getNodeMatchingLabel(expectedRoot, "SUPER").getOnlyChild().getOnlyChild();
     assertNode(callNode).hasToken(Token.CALL).hasEqualSourceInfoTo(sourceSuperCall);
 
     // D.call has the position and length of `super`
@@ -2618,7 +2709,7 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
             "let Bar = function() { Foo.apply(this, arguments); };",
             "$jscomp.inherits(Bar, Foo);",
             "Bar.prototype['m'] = function () {",
-            "  RETURN: return Foo.prototype['m'].call(this);",
+            "  RETURN: { return Foo.prototype['m'].call(this); }",
             "};");
 
     AstPair asts = testAndReturnAsts(source, expected);
@@ -2633,8 +2724,12 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     Node sourceSuper = sourceSuperGet.getFirstChild();
     assertNode(sourceSuper).hasToken(Token.SUPER);
 
+    // Multistage compilation does not preserve length in the actual output, so remove it from the
+    // expected output as well.
+    removeLengthFromSubtree(sourceRoot);
+
     // Foo.prototype['m'].call(this) matches source info of `super['m']()`
-    Node callNode = getNodeMatchingLabel(expectedRoot, "RETURN").getOnlyChild();
+    Node callNode = getNodeMatchingLabel(expectedRoot, "RETURN").getOnlyChild().getOnlyChild();
     assertNode(callNode).hasToken(Token.CALL).hasEqualSourceInfoTo(sourceSuperCall);
 
     // Foo.prototype['m'].call has the position and length of `super['m']'`
@@ -2811,6 +2906,14 @@ public final class Es6RewriteClassTest extends CompilerTestCase {
     AstPair(Node sourceRoot, Node expectedRoot) {
       this.sourceRoot = sourceRoot;
       this.expectedRoot = expectedRoot;
+    }
+  }
+
+  /** Sets n.getLength() to 0 for every node in the given subtree */
+  private static void removeLengthFromSubtree(Node root) {
+    root.setLength(0);
+    for (Node child = root.getFirstChild(); child != null; child = child.getNext()) {
+      removeLengthFromSubtree(child);
     }
   }
 }

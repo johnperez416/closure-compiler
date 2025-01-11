@@ -19,22 +19,22 @@ import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSType;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 
 /**
  * Checks that the code obeys the static restrictions of strict mode:
+ *
  * <ol>
- * <li> No use of "with".
- * <li> No deleting variables, functions, or arguments.
- * <li> No re-declarations or assignments of "eval" or arguments.
- * <li> No use of arguments.callee
- * <li> No use of arguments.caller
- * <li> Class: Always under strict mode
- * <li>   In addition, no duplicate class method names
+ *   <li>No use of "with".
+ *   <li>No deleting variables, functions, or arguments.
+ *   <li>No re-declarations or assignments of "eval" or arguments.
+ *   <li>No use of arguments.callee
+ *   <li>No use of arguments.caller
+ *   <li>Class: Always under strict mode
+ *   <li>In addition, no duplicate class method names
  * </ol>
  */
-class StrictModeCheck extends AbstractPostOrderCallback
-    implements CompilerPass {
+class StrictModeCheck extends AbstractPostOrderCallback implements CompilerPass {
 
   static final DiagnosticType USE_OF_WITH =
       DiagnosticType.error(
@@ -124,8 +124,8 @@ class StrictModeCheck extends AbstractPostOrderCallback
   }
 
   /**
-   * Determines if the given name is a declaration, which can be a declaration
-   * of a variable, function, or argument.
+   * Determines if the given name is a declaration, which can be a declaration of a variable,
+   * function, or argument.
    */
   private static boolean isDeclaration(Node n) {
     switch (n.getParent().getToken()) {
@@ -170,31 +170,39 @@ class StrictModeCheck extends AbstractPostOrderCallback
 
   /** Checks that object literal keys or class method names are valid. */
   private void checkObjectLiteralOrClass(Node n) {
-    HashSet<String> getters = new HashSet<>();
-    HashSet<String> setters = new HashSet<>();
-    HashSet<String> staticGetters = new HashSet<>();
-    HashSet<String> staticSetters = new HashSet<>();
+    LinkedHashSet<String> getters = new LinkedHashSet<>();
+    LinkedHashSet<String> setters = new LinkedHashSet<>();
+    LinkedHashSet<String> staticGetters = new LinkedHashSet<>();
+    LinkedHashSet<String> staticSetters = new LinkedHashSet<>();
 
-    /**
+    /*
      * Iterate backwards because the last duplicate is the one that will be used in sloppy or ES6
      * code. The earlier duplicates are the ones that should be removed.
      */
     for (Node key = n.getLastChild(); key != null; key = key.getPrevious()) {
-      if (key.isEmpty() || key.isComputedProp() || key.isSpread() || key.isComputedFieldDef()) {
+      if (key.isEmpty()
+          || key.isComputedProp()
+          || key.isSpread()
+          || key.isComputedFieldDef()
+          // Computed properties cannot be computed at compile time
+          || NodeUtil.isClassStaticBlock(key)
+      // Will not check since whether duplicates are declared/assigned cannot be determined at
+      // compile time since we do not know which code will be run
+      ) {
         continue;
       }
 
       String keyName = key.getString();
       if (!key.isSetterDef()) {
         // normal property and getter cases
-        HashSet<String> set = key.isStaticMember() ? staticGetters : getters;
+        LinkedHashSet<String> set = key.isStaticMember() ? staticGetters : getters;
         if (!set.add(keyName)) {
           this.report(key, DUPLICATE_MEMBER, keyName);
         }
       }
       if (!key.isGetterDef()) {
         // normal property and setter cases
-        HashSet<String> set = key.isStaticMember() ? staticSetters : setters;
+        LinkedHashSet<String> set = key.isStaticMember() ? staticSetters : setters;
         if (!set.add(keyName)) {
           this.report(key, DUPLICATE_MEMBER, keyName);
         }
@@ -248,6 +256,7 @@ class StrictModeCheck extends AbstractPostOrderCallback
   }
 
   private void report(Node n, DiagnosticType diagnostic, String... args) {
-    this.compiler.report(JSError.make(n, this.defaultLevel, diagnostic, args));
+    this.compiler.report(
+        JSError.builder(diagnostic, args).setLevel(this.defaultLevel).setNode(n).build());
   }
 }

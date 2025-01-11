@@ -16,7 +16,6 @@
 
 package com.google.javascript.jscomp;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -30,7 +29,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A class for generating unique, randomized JavaScript variable/property
@@ -62,10 +61,6 @@ import javax.annotation.Nullable;
  *
  * <p>This class is not thread safe.
  */
-@GwtIncompatible(
-    "java.util.Collections.shuffle, "
-    + "com.google.common.hash.Hasher, "
-    + "com.google.common.hash.Hashing")
 public final class RandomNameGenerator implements NameGenerator {
 
   /** Generate random names with this first character. */
@@ -110,7 +105,7 @@ public final class RandomNameGenerator implements NameGenerator {
   RandomNameGenerator(
       Set<String> reservedNames,
       String prefix,
-      @Nullable char[] reservedCharacters,
+      char @Nullable [] reservedCharacters,
       Random random) {
     this.random = random;
     reset(reservedNames, prefix, reservedCharacters);
@@ -133,8 +128,8 @@ public final class RandomNameGenerator implements NameGenerator {
   RandomNameGenerator(
       Set<String> reservedNames,
       String prefix,
-      @Nullable char[] reservedFirstCharacters,
-      @Nullable char[] reservedNonFirstCharacters,
+      char @Nullable [] reservedFirstCharacters,
+      char @Nullable [] reservedNonFirstCharacters,
       Random random) {
     this.random = random;
     reset(reservedNames, prefix, reservedFirstCharacters, reservedNonFirstCharacters);
@@ -142,9 +137,7 @@ public final class RandomNameGenerator implements NameGenerator {
 
   @Override
   public void reset(
-      Set<String> reservedNames,
-      String prefix,
-      @Nullable char[] reservedCharacters) {
+      Set<String> reservedNames, String prefix, char @Nullable [] reservedCharacters) {
     reset(reservedNames, prefix, reservedCharacters, reservedCharacters);
   }
 
@@ -152,8 +145,8 @@ public final class RandomNameGenerator implements NameGenerator {
   public void reset(
       Set<String> reservedNames,
       String prefix,
-      @Nullable char[] reservedFirstCharacters,
-      @Nullable char[] reservedNonFirstCharacters) {
+      char @Nullable [] reservedFirstCharacters,
+      char @Nullable [] reservedNonFirstCharacters) {
     this.reservedNames = ImmutableSet.copyOf(reservedNames);
     this.prefix = prefix;
     nameCount = 0;
@@ -169,14 +162,12 @@ public final class RandomNameGenerator implements NameGenerator {
 
   @Override
   public NameGenerator clone(
-      Set<String> reservedNames,
-      String prefix,
-      @Nullable char[] reservedCharacters) {
+      Set<String> reservedNames, String prefix, char @Nullable [] reservedCharacters) {
     return new RandomNameGenerator(
         reservedNames, prefix, reservedCharacters, random);
   }
 
-  private static ImmutableSet<Character> asSet(@Nullable char[] chars) {
+  private static ImmutableSet<Character> asSet(char @Nullable [] chars) {
     return chars == null ? ImmutableSet.of() : ImmutableSet.copyOf(Chars.asList(chars));
   }
 

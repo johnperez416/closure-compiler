@@ -45,10 +45,12 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.javascript.jscomp.base.JSCompDoubles.isPositive;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
-import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import com.google.errorprone.annotations.CheckReturnValue;
 import com.google.errorprone.annotations.DoNotCall;
 import com.google.javascript.jscomp.colors.Color;
 import com.google.javascript.jscomp.serialization.NodeProperty;
@@ -57,15 +59,13 @@ import com.google.javascript.rhino.jstype.JSType;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Iterator;
-import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.function.Function;
-import javax.annotation.CheckReturnValue;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * This class implements the root of the intermediate representation.
@@ -78,6 +78,7 @@ public class Node {
     IS_PARENTHESIZED,
     // Contains non-JSDoc comment
     NON_JSDOC_COMMENT,
+    TRAILING_NON_JSDOC_COMMENT,
     // Contains a JSDocInfo object
     JSDOC_INFO,
     // Whether incrdecr is pre (false) or post (true)
@@ -106,9 +107,6 @@ public class Node {
     SOURCE_FILE,
     // The id of the input associated with this node.
     INPUT_ID,
-    // Whether a STRING node contains a \v vertical tab escape. This is a total hack. See comments
-    // in IRFactory about this.
-    SLASH_V,
     // For passes that work only on changed funs.
     CHANGE_TIME,
     // An object that's used for goog.object.reflect-style reflection.
@@ -165,9 +163,6 @@ public class Node {
     ACCESS_MODIFIER,
     // Indicates the node should not be indexed by analysis tools.
     NON_INDEXABLE,
-    // Parse results stored on SCRIPT nodes to allow replaying parse warnings/errors when cloning
-    // cached ASTs.
-    PARSE_RESULTS,
     // Indicates that a SCRIPT node is a goog.module. Remains set after the goog.module is
     // desugared.
     GOOG_MODULE,
@@ -175,8 +170,6 @@ public class Node {
     FEATURE_SET,
     // Indicates a TypeScript abstract method or class, for use in Migrants
     IS_TYPESCRIPT_ABSTRACT,
-    // Indicates that a SCRIPT represents a transpiled file
-    TRANSPILED,
     // For passes that work only on deleted funs.
     DELETED,
     // Indicates that the node is an alias or a name from goog.require'd module or ES6
@@ -201,7 +194,19 @@ public class Node {
     // Indicates a trailing comma in an array literal, object literal, parameter list, or argument
     // list
     TRAILING_COMMA,
+    // Indicates that a variable declaration was synthesized to provide a declaration of some
+    // name referenced in code but never defined, as most compiler passes expect that to be an
+    // invariant.
+    // Only present in the "synthetic externs file". Builds initialized using a
+    // "TypedAST filesystem" will delete any such declarations present in a different compilation
+    // shard
+    SYNTHESIZED_UNFULFILLED_NAME_DECLARATION,
+    // This prop holds a reference to a closure-unaware sub-AST.
+    CLOSURE_UNAWARE_SHADOW,
   }
+
+  // Avoid cloning "values" repeatedly in hot code, we save it off now.
+  private static final Prop[] propValues = Prop.values();
 
   /**
    * Get the NonJSDoc comment string attached to this node.
@@ -219,19 +224,37 @@ public class Node {
     return (NonJSDocComment) getProp(Prop.NON_JSDOC_COMMENT);
   }
 
+  public final String getTrailingNonJSDocCommentString() {
+    if (getProp(Prop.TRAILING_NON_JSDOC_COMMENT) == null) {
+      return "";
+    }
+    return ((NonJSDocComment) getProp(Prop.TRAILING_NON_JSDOC_COMMENT)).getCommentString();
+  }
+
+  public final NonJSDocComment getTrailingNonJSDocComment() {
+    return (NonJSDocComment) getProp(Prop.TRAILING_NON_JSDOC_COMMENT);
+  }
+
   /** Sets the NonJSDoc comment attached to this node. */
+  @CanIgnoreReturnValue
   public final Node setNonJSDocComment(NonJSDocComment comment) {
     putProp(Prop.NON_JSDOC_COMMENT, comment);
     return this;
   }
 
-  /** Sets whether this node is inside parentheses. */
+  @CanIgnoreReturnValue
+  public final Node setTrailingNonJSDocComment(NonJSDocComment comment) {
+    putProp(Prop.TRAILING_NON_JSDOC_COMMENT, comment);
+    return this;
+  }
+
+  /** Sets whether this node was inside original source-level parentheses. */
   public final void setIsParenthesized(boolean b) {
     checkState(IR.mayBeExpression(this));
     putBooleanProp(Prop.IS_PARENTHESIZED, b);
   }
 
-  /** Check whether node was inside parentheses. */
+  /** Check whether node was inside original source-level parentheses. */
   public final boolean getIsParenthesized() {
     return getBooleanProp(Prop.IS_PARENTHESIZED);
   }
@@ -245,7 +268,6 @@ public class Node {
   public static final Prop IS_NAMESPACE = Prop.IS_NAMESPACE;
   public static final Prop DIRECT_EVAL = Prop.DIRECT_EVAL;
   public static final Prop FREE_CALL = Prop.FREE_CALL;
-  public static final Prop SLASH_V = Prop.SLASH_V;
   public static final Prop REFLECTED_OBJECT = Prop.REFLECTED_OBJECT;
   public static final Prop STATIC_MEMBER = Prop.STATIC_MEMBER;
   public static final Prop GENERATOR_FN = Prop.GENERATOR_FN;
@@ -261,11 +283,9 @@ public class Node {
   public static final Prop IMPLEMENTS = Prop.IMPLEMENTS;
   public static final Prop CONSTRUCT_SIGNATURE = Prop.CONSTRUCT_SIGNATURE;
   public static final Prop ACCESS_MODIFIER = Prop.ACCESS_MODIFIER;
-  public static final Prop PARSE_RESULTS = Prop.PARSE_RESULTS;
   public static final Prop GOOG_MODULE = Prop.GOOG_MODULE;
   public static final Prop FEATURE_SET = Prop.FEATURE_SET;
   public static final Prop IS_TYPESCRIPT_ABSTRACT = Prop.IS_TYPESCRIPT_ABSTRACT;
-  public static final Prop TRANSPILED = Prop.TRANSPILED;
   public static final Prop MODULE_ALIAS = Prop.MODULE_ALIAS;
   public static final Prop MODULE_EXPORT = Prop.MODULE_EXPORT;
   public static final Prop IS_SHORTHAND_PROPERTY = Prop.IS_SHORTHAND_PROPERTY;
@@ -338,6 +358,11 @@ public class Node {
       setString(str);
     }
 
+    StringNode(Token token, RhinoStringPool.LazyInternedStringList stringPool, int offset) {
+      super(token);
+      setStringFromStringPool(stringPool, offset);
+    }
+
     @Override
     public boolean isEquivalentTo(
         Node node, boolean compareType, boolean recur, boolean jsDoc, boolean sideEffect) {
@@ -362,7 +387,7 @@ public class Node {
      * <p>Null iff the raw string contains an uncookable escape sequence.
      * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Template_literals#es2018_revision_of_illegal_escape_sequences
      */
-    @Nullable private final String cooked;
+    private final @Nullable String cooked;
 
     /** The raw version of the template literal substring, is not null */
     private final String raw;
@@ -372,6 +397,16 @@ public class Node {
       // RhinoStringPool is null-hostile.
       this.cooked = (cooked == null) ? null : RhinoStringPool.addOrGet(cooked);
       this.raw = RhinoStringPool.addOrGet(raw);
+    }
+
+    private TemplateLiteralSubstringNode(
+        RhinoStringPool.LazyInternedStringList stringPool,
+        int cookedOffsetOrNegativeOne,
+        int rawOffset) {
+      super(Token.TEMPLATELIT_STRING);
+      this.cooked =
+          (cookedOffsetOrNegativeOne == -1) ? null : stringPool.get(cookedOffsetOrNegativeOne);
+      this.raw = stringPool.get(rawOffset);
     }
 
     @Override
@@ -536,8 +571,20 @@ public class Node {
     return new StringNode(token, str);
   }
 
+  public static Node newString(
+      Token token, RhinoStringPool.LazyInternedStringList stringPool, int offset) {
+    return new StringNode(token, stringPool, offset);
+  }
+
   public static Node newTemplateLitString(String cooked, String raw) {
     return new TemplateLiteralSubstringNode(cooked, raw);
+  }
+
+  public static Node newTemplateLitString(
+      RhinoStringPool.LazyInternedStringList stringPool,
+      int cookedOffsetOrNegativeOne,
+      int rawOffset) {
+    return new TemplateLiteralSubstringNode(stringPool, cookedOffsetOrNegativeOne, rawOffset);
   }
 
   public final Token getToken() {
@@ -557,8 +604,7 @@ public class Node {
     return first;
   }
 
-  @Nullable
-  public final Node getFirstChild() {
+  public final @Nullable Node getFirstChild() {
     return first;
   }
 
@@ -567,29 +613,40 @@ public class Node {
    *
    * @return The first child of the first child.
    */
-  @Nullable
-  public final Node getFirstFirstChild() {
+  public final @Nullable Node getFirstFirstChild() {
     return first.first;
   }
 
-  @Nullable
-  public final Node getSecondChild() {
+  public final @Nullable Node getSecondChild() {
     return first.next;
   }
 
-  @Nullable
-  public final Node getLastChild() {
+  public final @Nullable Node getLastChild() {
     return first != null ? first.previous : null;
   }
 
-  @Nullable
-  public final Node getNext() {
+  public final @Nullable Node getNext() {
     return next;
   }
 
-  @Nullable
-  public final Node getPrevious() {
+  public final @Nullable Node getPrevious() {
     return this == parent.first ? null : previous;
+  }
+
+  public final void setClosureUnawareShadow(@Nullable Node shadowRoot) {
+    checkState(this.first == null, "Cannot set shadow root on a node with children");
+    checkState(this.token == Token.NAME, "Only NAME nodes can be used as shadows");
+    this.putProp(Prop.CLOSURE_UNAWARE_SHADOW, shadowRoot);
+  }
+
+  public final @Nullable Node getClosureUnawareShadow() {
+    if (this.token != Token.NAME) {
+      // As checked in setClosureUnawareShadow, only NAME nodes can have shadow content.
+      // We short-circuit the getProp call here because that can be very expensive for nodes that
+      // have long proplists (and we know it wouldn't find this prop anyways).
+      return null;
+    }
+    return (Node) this.getProp(Prop.CLOSURE_UNAWARE_SHADOW);
   }
 
   /**
@@ -826,6 +883,7 @@ public class Node {
   }
 
   /** Removes this node from its parent, but retains its subtree. */
+  @CanIgnoreReturnValue
   public final Node detach() {
     this.checkAttached();
 
@@ -873,8 +931,7 @@ public class Node {
    *
    * @return The removed Node.
    */
-  @Nullable
-  public final Node removeFirstChild() {
+  public final @Nullable Node removeFirstChild() {
     Node child = first;
     if (child != null) {
       child.detach();
@@ -882,9 +939,12 @@ public class Node {
     return child;
   }
 
-  /** @return A Node that is the head of the list of children. */
-  @Nullable
-  public final Node removeChildren() {
+  /**
+   * Remove all children, but leave them linked to each other.
+   *
+   * @return The first child node
+   */
+  public final @Nullable Node removeChildren() {
     Node children = first;
     for (Node child = first; child != null; child = child.next) {
       child.parent = null;
@@ -906,8 +966,8 @@ public class Node {
   }
 
   @VisibleForTesting
-  @Nullable
-  final PropListItem lookupProperty(Prop prop) {
+  @SuppressWarnings("EnumOrdinal") // performance tuning
+  final @Nullable PropListItem lookupProperty(Prop prop) {
     byte propType = (byte) prop.ordinal();
     PropListItem x = propListHead;
     while (x != null && propType != x.propType) {
@@ -923,6 +983,7 @@ public class Node {
    * @param other The node to clone properties from.
    * @return this node.
    */
+  @CanIgnoreReturnValue
   public final Node clonePropsFrom(Node other) {
     checkState(this.propListHead == null, "Node has existing properties.");
     this.propListHead = other.propListHead;
@@ -930,12 +991,124 @@ public class Node {
   }
 
   /**
+   * Checks for invalid or missing properties and feeds error messages for any violations to the
+   * given `Consumer`.
+   *
+   * <p>We use a `Consumer` to avoid the cost of building a usually-empty list every time this
+   * method is called.
+   */
+  @SuppressWarnings("EnumOrdinal") // performance tuning
+  public void validateProperties(Consumer<String> violationMessageConsumer) {
+    if (propListHead == null) {
+      // TODO(bradfordcsmith): Fix the bugs that prevent enabling this validation.
+      //
+      // In particular:
+      //
+      // 1. CoverageInstrumentationPass and BranchCoverageInstrumentationCallback
+      // create a bunch of nodes without valid source reference info, and it isn't obvious what
+      // source reference info they should be using.
+      //
+      // 2. b/186056977 covers an issue blocking correcting a violation in `VarCheck`
+      //
+      // 3. Fixing a violation in DeclaredGlobalExternsOnWindow makes an unexpected change to
+      //    the pre-computed TypedAst for the runtime libraries.
+      //
+      // if (token != Token.ROOT) {
+      //   violationMessageConsumer.accept("non-ROOT has no properties");
+      // }
+      return;
+    }
+
+    if (token == Token.ROOT) {
+      // ROOT tokens should never have properties
+      violationMessageConsumer.accept("ROOT has properties");
+    }
+
+    for (PropListItem propListItem = propListHead;
+        propListItem != null;
+        propListItem = propListItem.next) {
+      final Prop prop = propValues[propListItem.propType];
+      // Catch it if the definition of Prop ever changes so that the ordinals don't line up.
+      checkState(prop.ordinal() == propListItem.propType, "ordinal doesn't match: %s", prop);
+
+      // TODO(bradfordcsmith): This is not yet an exhaustive list of validations.
+      // Other validations should be added as it is found useful to have them.
+      // Some property validation is done independently in `AstValidator` and could possibly be
+      // moved here.
+      //
+      // This method was added in response to a bug that created an invalid IS_PARENTHESIZED
+      // property that was discovered by a check in `deserializeProperties()`, so initially
+      // this method was created to cover the checks previously done there.
+      switch (prop) {
+        case IS_PARENTHESIZED:
+          if (!IR.mayBeExpression(this)) {
+            violationMessageConsumer.accept("non-expression is parenthesized");
+          }
+          break;
+        case ARROW_FN:
+          if (!isFunction()) {
+            violationMessageConsumer.accept("invalid ARROW_FN prop");
+          }
+          break;
+        case ASYNC_FN:
+          if (!isFunction()) {
+            violationMessageConsumer.accept("invalid ASYNC_FN prop");
+          }
+          break;
+        case SYNTHETIC:
+          if (!isBlock()) {
+            violationMessageConsumer.accept("invalid SYNTHETIC prop");
+          }
+          break;
+        case COLOR_FROM_CAST:
+          if (getColor() == null) {
+            violationMessageConsumer.accept("COLOR_FROM_CAST with no Color");
+          }
+          break;
+        case START_OF_OPT_CHAIN:
+          if (!(isOptChainCall() || isOptChainGetElem() || isOptChainGetProp())) {
+            violationMessageConsumer.accept("START_OF_OPT_CHAIN on non-optional Node");
+          }
+          break;
+        case CONSTANT_VAR_FLAGS:
+          if (!(isName() || isImportStar())) {
+            violationMessageConsumer.accept("invalid CONST_VAR_FLAGS");
+          }
+          break;
+        case SYNTHESIZED_UNFULFILLED_NAME_DECLARATION:
+          // note: we could relax this restriction if VarCheck needed to generate other forms of
+          // synthetic externs
+          if (!isVar()) {
+            // TODO: this check used to also try and validate that the synthetic externs VAR's had
+            // names, but this doesn't work during deserialization because the name is a child node
+            // that we haven't even seen yet when we are validating properties.
+            // || !hasOneChild() || !getFirstChild().isName()) {
+            violationMessageConsumer.accept(
+                "Expected all synthetic unfulfilled declarations to be `var <name>`");
+          }
+          break;
+        case CLOSURE_UNAWARE_SHADOW:
+          PropListItem shadowProp = lookupProperty(Prop.CLOSURE_UNAWARE_SHADOW);
+          if (!(shadowProp instanceof Node.ObjectPropListItem)
+              || !(shadowProp.getObjectValue() instanceof Node)) {
+            violationMessageConsumer.accept("CLOSURE_UNAWARE_SHADOW property must point to a Node");
+          }
+          break;
+        default:
+          // No validation is currently done for other properties
+          break;
+      }
+    }
+  }
+
+  /**
    * @param item The item to inspect
-   * @param propType The property to look for
+   * @param prop The property to look for
    * @return The replacement list if the property was removed, or 'item' otherwise.
    */
-  @Nullable
-  private static final PropListItem rebuildListWithoutProp(@Nullable PropListItem item, Prop prop) {
+  @SuppressWarnings("EnumOrdinal") // performance tuning
+  private static @Nullable PropListItem rebuildListWithoutProp(
+      @Nullable PropListItem item, Prop prop) {
     if (item == null) {
       return null;
     } else if (item.propType == prop.ordinal()) {
@@ -946,8 +1119,7 @@ public class Node {
     }
   }
 
-  @Nullable
-  public final Object getProp(Prop propType) {
+  public final @Nullable Object getProp(Prop propType) {
     PropListItem item = lookupProperty(propType);
     if (item == null) {
       return null;
@@ -960,7 +1132,7 @@ public class Node {
   }
 
   /** Returns the integer value for the property, or 0 if the property is not defined. */
-  private final int getIntProp(Prop propType) {
+  private int getIntProp(Prop propType) {
     PropListItem item = lookupProperty(propType);
     if (item == null) {
       return 0;
@@ -968,6 +1140,7 @@ public class Node {
     return item.getIntValue();
   }
 
+  @SuppressWarnings("EnumOrdinal") // performance tuning
   public final void putProp(Prop prop, @Nullable Object value) {
     this.propListHead = rebuildListWithoutProp(this.propListHead, prop);
     if (value != null) {
@@ -979,6 +1152,7 @@ public class Node {
     putIntProp(propType, value ? 1 : 0);
   }
 
+  @SuppressWarnings("EnumOrdinal") // performance tuning
   public final void putIntProp(Prop prop, int value) {
     this.propListHead = rebuildListWithoutProp(this.propListHead, prop);
     if (value != 0) {
@@ -986,33 +1160,62 @@ public class Node {
     }
   }
 
-  private static final Prop[] PROP_VALUES = Prop.values();
+  static long nodePropertyToBit(NodeProperty prop) {
+    return 1L << prop.getNumber();
+  }
 
-  public final EnumSet<NodeProperty> serializeProperties() {
-    EnumSet<NodeProperty> propSet = EnumSet.noneOf(NodeProperty.class);
+  static long setNodePropertyBit(long bitset, NodeProperty prop) {
+    return bitset | nodePropertyToBit(prop);
+  }
+
+  static long removeNodePropertyBit(long bitset, NodeProperty prop) {
+    return bitset & ~nodePropertyToBit(prop);
+  }
+
+  static boolean hasNodePropertyBitSet(long bitset, NodeProperty prop) {
+    return (bitset & nodePropertyToBit(prop)) != 0;
+  }
+
+  public static final boolean hasBitSet(long bitset, int bit) {
+    return (bitset & 1L << bit) != 0;
+  }
+
+  public final long serializeProperties() {
+    long propSet = 0;
     for (PropListItem propListItem = this.propListHead;
         propListItem != null;
         propListItem = propListItem.next) {
-      Prop prop = PROP_VALUES[propListItem.propType];
+      Prop prop = propValues[propListItem.propType];
 
       switch (prop) {
         case TYPE_BEFORE_CAST:
-          propSet.add(NodeProperty.COLOR_FROM_CAST);
+          propSet = setNodePropertyBit(propSet, NodeProperty.COLOR_FROM_CAST);
           break;
         case CONSTANT_VAR_FLAGS:
           int intVal = propListItem.getIntValue();
           if (anyBitSet(intVal, ConstantVarFlags.INFERRED)) {
-            propSet.add(NodeProperty.IS_INFERRED_CONSTANT);
+            propSet = setNodePropertyBit(propSet, NodeProperty.IS_INFERRED_CONSTANT);
           }
           if (anyBitSet(intVal, ConstantVarFlags.DECLARED)) {
-            propSet.add(NodeProperty.IS_DECLARED_CONSTANT);
+            propSet = setNodePropertyBit(propSet, NodeProperty.IS_DECLARED_CONSTANT);
           }
+          break;
+        case SIDE_EFFECT_FLAGS:
+          propSet = setNodePropertySideEffectFlags(propSet, propListItem.getIntValue());
+          break;
+        case CLOSURE_UNAWARE_SHADOW:
+          // This is a bit of an unusual case, because the CLOSURE_UNAWARE_SHADOW Prop is a Node
+          // pointer, not a boolean.
+          // However, it is treated as a boolean property in the TypedAST representation as a signal
+          // that the child ASTNode is shadowed code and not a normal child node.
+          // We check for this bit when building in ScriptNodeDeserializer.
+          propSet = setNodePropertyBit(propSet, NodeProperty.CLOSURE_UNAWARE_SHADOW);
           break;
         default:
           if (propListItem instanceof Node.IntPropListItem) {
             NodeProperty nodeProperty = PropTranslator.serialize(prop);
             if (nodeProperty != null) {
-              propSet.add(nodeProperty);
+              propSet = setNodePropertyBit(propSet, nodeProperty);
             }
           }
           break;
@@ -1021,54 +1224,103 @@ public class Node {
     return propSet;
   }
 
-  public final void deserializeProperties(List<NodeProperty> serializedNodeBooleanPropertyList) {
+  /**
+   * Update a bit field to be used for serialized node properties to include bits from the
+   * `SIDE_EFFECT_FLAGS` Node property.
+   *
+   * @param propSet the bit field to update
+   * @param sideEffectFlags the integer value from the `SIDE_EFFECT_FLAGS` property
+   * @return the updated property set
+   */
+  private long setNodePropertySideEffectFlags(long propSet, int sideEffectFlags) {
+    if (anyBitSet(sideEffectFlags, SideEffectFlags.MUTATES_GLOBAL_STATE)) {
+      propSet = setNodePropertyBit(propSet, NodeProperty.MUTATES_GLOBAL_STATE);
+    }
+    if (anyBitSet(sideEffectFlags, SideEffectFlags.MUTATES_THIS)) {
+      propSet = setNodePropertyBit(propSet, NodeProperty.MUTATES_THIS);
+    }
+    if (anyBitSet(sideEffectFlags, SideEffectFlags.MUTATES_ARGUMENTS)) {
+      propSet = setNodePropertyBit(propSet, NodeProperty.MUTATES_ARGUMENTS);
+    }
+    if (anyBitSet(sideEffectFlags, SideEffectFlags.THROWS)) {
+      propSet = setNodePropertyBit(propSet, NodeProperty.THROWS);
+    }
+    return propSet;
+  }
+
+  @SuppressWarnings("EnumOrdinal") // performance tuning
+  public final void deserializeProperties(long propSet) {
     if (this.isRoot()) {
       checkState(this.propListHead == null, this.propListHead);
     } else {
       checkState(this.propListHead.propType == Prop.SOURCE_FILE.ordinal(), this.propListHead);
     }
 
-    EnumSet<NodeProperty> propSet = EnumSet.noneOf(NodeProperty.class);
-    for (int i = 0; i < serializedNodeBooleanPropertyList.size(); i++) {
-      NodeProperty nodeProperty = serializedNodeBooleanPropertyList.get(i);
-      checkState(propSet.add(nodeProperty), "Found multiple node property: %s", nodeProperty);
+    // We'll gather the bits for CONST_VAR_FLAGS and SIDE_EFFECT_FLAGS into these variables.
+    int constantVarFlags = 0;
+    int sideEffectFlags = 0;
+    // Exclude the sign bit for clarity.
+    for (int i = 0; i < 63; i++) {
+      if (!hasBitSet(propSet, i)) {
+        continue;
+      }
+      NodeProperty nodeProperty = NodeProperty.forNumber(i);
+      switch (nodeProperty) {
+        case IS_DECLARED_CONSTANT:
+          constantVarFlags |= ConstantVarFlags.DECLARED;
+          break;
+        case IS_INFERRED_CONSTANT:
+          constantVarFlags |= ConstantVarFlags.INFERRED;
+          break;
+        case MUTATES_GLOBAL_STATE:
+          sideEffectFlags |= SideEffectFlags.MUTATES_GLOBAL_STATE;
+          break;
+        case MUTATES_THIS:
+          sideEffectFlags |= SideEffectFlags.MUTATES_THIS;
+          break;
+        case MUTATES_ARGUMENTS:
+          sideEffectFlags |= SideEffectFlags.MUTATES_ARGUMENTS;
+          break;
+        case THROWS:
+          sideEffectFlags |= SideEffectFlags.THROWS;
+          break;
+        case CLOSURE_UNAWARE_SHADOW:
+          // Ignore this - we need the deserialized child to actually set the shadow.
+          // We'll check for this higher up in the call stack.
+          // If we don't ignore this, then a boolean prop is created (and then later clobbered)
+          // representing this property, which seems silly at best and potentially dangerous at
+          // worst.
+          break;
+        default:
+          // All other properties are booleans that are 1-to-1 equivalent with Node properties.
+          Prop prop = PropTranslator.deserialize(nodeProperty);
+          if (prop == null) {
+            throw new IllegalStateException("Can not translate " + nodeProperty + " to AST Prop");
+          }
+          this.propListHead = new IntPropListItem((byte) prop.ordinal(), 1, this.propListHead);
+          break;
+      }
     }
 
-    if (propSet.contains(NodeProperty.ARROW_FN) || propSet.contains(NodeProperty.ASYNC_FN)) {
-      checkState(isFunction());
-    }
-    if (propSet.contains(NodeProperty.IS_PARENTHESIZED)) {
-      checkState(IR.mayBeExpression(this));
-    }
-    if (propSet.contains(NodeProperty.SYNTHETIC)) {
-      checkState(token == Token.BLOCK);
-    }
-    if (propSet.contains(NodeProperty.COLOR_FROM_CAST)) {
-      checkState(getColor() != null, "Only use on nodes with colors present");
-    }
-    if (propSet.contains(NodeProperty.START_OF_OPT_CHAIN)) {
-      checkState(
-          isOptChainGetElem() || isOptChainGetProp() || isOptChainCall(),
-          "cannot make a non-optional node the start of an optional chain.");
-    }
-    if (propSet.contains(NodeProperty.IS_DECLARED_CONSTANT)
-        || propSet.contains(NodeProperty.IS_INFERRED_CONSTANT)) {
-      checkState(
-          isName() || isImportStar(),
-          "Should only be called on name or import * nodes. Found %s",
-          this);
-      int newConstantVarFlags =
-          (propSet.remove(NodeProperty.IS_DECLARED_CONSTANT) ? ConstantVarFlags.DECLARED : 0)
-              | (propSet.remove(NodeProperty.IS_INFERRED_CONSTANT) ? ConstantVarFlags.INFERRED : 0);
+    // Store the CONSTANT_VAR_FLAGS
+    if (constantVarFlags != 0) {
       this.propListHead =
           new IntPropListItem(
-              (byte) Prop.CONSTANT_VAR_FLAGS.ordinal(), newConstantVarFlags, this.propListHead);
+              (byte) Prop.CONSTANT_VAR_FLAGS.ordinal(), constantVarFlags, this.propListHead);
     }
 
-    for (NodeProperty nodeProperty : propSet) {
-      Prop prop = PropTranslator.deserialize(nodeProperty);
-      this.propListHead = new IntPropListItem((byte) prop.ordinal(), 1, this.propListHead);
+    if (sideEffectFlags != 0) {
+      this.propListHead =
+          new IntPropListItem(
+              (byte) Prop.SIDE_EFFECT_FLAGS.ordinal(), sideEffectFlags, this.propListHead);
     }
+
+    // Make sure the deserialized properties are valid.
+    validateProperties(
+        // NOTE: errorMessage will never be null, but just passing `false` to `checkState()`
+        // triggers warning messages from some code analysis tools.
+        errorMessage ->
+            checkState(errorMessage == null, "deserialize error: %s: %s", errorMessage, this));
   }
 
   /** Sets the syntactical type specified on this node. */
@@ -1080,8 +1332,7 @@ public class Node {
    * Returns the syntactical type specified on this node. Not to be confused with {@link
    * #getJSType()} which returns the compiler-inferred type.
    */
-  @Nullable
-  public final Node getDeclaredTypeExpression() {
+  public final @Nullable Node getDeclaredTypeExpression() {
     return (Node) getProp(Prop.DECLARED_TYPE_EXPR);
   }
 
@@ -1094,8 +1345,7 @@ public class Node {
    * Returns the type of this node before casting. This annotation will only exist on the first
    * child of a CAST node after type checking.
    */
-  @Nullable
-  public final JSType getJSTypeBeforeCast() {
+  public final @Nullable JSType getJSTypeBeforeCast() {
     return (JSType) getProp(Prop.TYPE_BEFORE_CAST);
   }
 
@@ -1160,12 +1410,19 @@ public class Node {
     ((StringNode) this).str = RhinoStringPool.addOrGet(str); // RhinoStringPool is null-hostile.
   }
 
+  final void setStringFromStringPool(
+      RhinoStringPool.LazyInternedStringList stringPool, int offset) {
+    // RhinoStringPool.LazyInternedStringList guarantees that the result of calling get(offset) is
+    // interned. In some cases this is more performance than RhinoStringPool.addOrGet because the
+    // LazyInternedStringList caches interning results.
+    ((StringNode) this).str = stringPool.get(offset);
+  }
+
   public final String getRawString() {
     return ((TemplateLiteralSubstringNode) this).raw;
   }
 
-  @Nullable
-  public final String getCookedString() {
+  public final @Nullable String getCookedString() {
     return ((TemplateLiteralSubstringNode) this).cooked;
   }
 
@@ -1219,7 +1476,11 @@ public class Node {
     if (printAnnotations) {
       byte[] keys = getSortedPropTypes();
       for (int i = 0; i < keys.length; i++) {
-        Prop type = Prop.values()[keys[i]];
+        Prop type = propValues[keys[i]];
+        if (type == Prop.CLOSURE_UNAWARE_SHADOW) {
+          sb.append(" [is_shadow_host]");
+          continue;
+        }
         PropListItem x = lookupProperty(type);
         sb.append(" [");
         sb.append(Ascii.toLowerCase(String.valueOf(type)));
@@ -1243,6 +1504,93 @@ public class Node {
     }
   }
 
+  private static String createJsonPair(String name, String value) {
+    return "\"" + name + "\":\"" + value + "\"";
+  }
+
+  private static String createJsonPairRawValue(String name, String value) {
+    return "\"" + name + "\":" + value;
+  }
+
+  private void toJson(Appendable sb) throws IOException {
+    sb.append('{');
+    sb.append(createJsonPair("token", token.toString()));
+    if (this instanceof StringNode) {
+      sb.append(',');
+      sb.append(createJsonPair("string", getString()));
+    } else if (token == Token.FUNCTION) {
+      sb.append(',');
+      // In the case of JsDoc trees, the first child is often not a string
+      // which causes exceptions to be thrown when calling toString or
+      // toStringTree.
+      if (first == null || first.token != Token.NAME) {
+        sb.append(createJsonPair("functionName", "<invalid>"));
+      } else {
+        sb.append(createJsonPair("functionName", first.getString()));
+      }
+    } else if (token == Token.NUMBER) {
+      sb.append(',');
+      sb.append(createJsonPair("number", String.valueOf(getDouble())));
+    }
+    int lineno = getLineno();
+    if (lineno != -1) {
+      sb.append(',');
+      sb.append("\"sourceLocation\":{");
+      sb.append(createJsonPairRawValue("line", String.valueOf(lineno)));
+      sb.append(',');
+      sb.append(createJsonPairRawValue("col", String.valueOf(getCharno())));
+      if (length != 0) {
+        sb.append(',');
+        sb.append(createJsonPairRawValue("length", String.valueOf(length)));
+      }
+      sb.append("}");
+    }
+
+    if (this.originalName != null) {
+      sb.append(",");
+      sb.append(createJsonPair("original_name", this.originalName));
+    }
+
+    byte[] keys = getSortedPropTypes();
+    if (keys.length != 0) {
+      sb.append(",");
+      sb.append("\"props\":{");
+      for (int i = 0; i < keys.length; i++) {
+        Prop type = propValues[keys[i]];
+        PropListItem x = lookupProperty(type);
+        sb.append(
+            createJsonPair(
+                Ascii.toLowerCase(String.valueOf(type)),
+                x.toString().replace("\n", "\\n").replace("\"", "\\\"")));
+        if (i + 1 < keys.length) {
+          sb.append(',');
+        }
+      }
+      sb.append("}");
+    }
+
+    if (jstypeOrColor != null) {
+      String typeString = jstypeOrColor.toString();
+      if (typeString != null) {
+        sb.append(',');
+        sb.append(createJsonPair("typeString", typeString.replace("\"", "\\\"")));
+      }
+    }
+
+    if (this.first != null) {
+      sb.append(',');
+      sb.append("\"children\":[");
+      for (Node child = this.first; child != null; child = child.next) {
+        child.toJson(sb);
+        if (child.next != null) {
+          sb.append(',');
+        }
+      }
+      sb.append("]");
+    }
+    sb.append('}');
+  }
+
   @CheckReturnValue
   public final String toStringTree() {
     return toStringTreeImpl();
@@ -1254,7 +1602,7 @@ public class Node {
       appendStringTree(s);
       return s.toString();
     } catch (IOException e) {
-      throw new RuntimeException("Should not happen\n" + e);
+      throw new IllegalStateException("Should not happen\n" + e);
     }
   }
 
@@ -1271,13 +1619,26 @@ public class Node {
     for (Node cursor = n.first; cursor != null; cursor = cursor.next) {
       toStringTreeHelper(cursor, level + 1, sb);
     }
+    Node shadow = n.getClosureUnawareShadow();
+    if (shadow != null) {
+      toStringTreeHelper(shadow, level + 1, sb);
+    }
+  }
+
+  public final void appendJsonTree(Appendable appendable) throws IOException {
+    toJsonTreeHelper(this, appendable);
+  }
+
+  private static void toJsonTreeHelper(Node n, Appendable sb) throws IOException {
+    n.toJson(sb);
   }
 
   private transient Token token; // Type of the token of the node; NAME for example
-  @Nullable private transient Node next; // next sibling, a linked list
-  @Nullable private transient Node previous; // previous sibling, a circular linked list
-  @Nullable private transient Node first; // first element of a linked list of children
-  @Nullable private transient Node parent;
+  private transient @Nullable Node next; // next sibling, a linked list
+  private transient @Nullable Node previous; // previous sibling, a circular linked list
+  private transient @Nullable Node first; // first element of a linked list of children
+  private transient @Nullable Node parent;
+
   // We get the last child as first.previous. But last.next is null, not first.
 
   /**
@@ -1290,20 +1651,21 @@ public class Node {
   /** The length of the code represented by the node. */
   private transient int length;
 
-  @Nullable private transient Object jstypeOrColor;
+  private transient @Nullable Object jstypeOrColor;
 
-  @Nullable private transient String originalName;
+  private transient @Nullable String originalName;
 
   /**
    * Linked list of properties. Since vast majority of nodes would have no more than 2 properties,
    * linked list saves memory and provides fast lookup. If this does not holds, propListHead can be
    * replaced by UintMap.
    */
-  @Nullable private transient PropListItem propListHead;
+  private transient @Nullable PropListItem propListHead;
 
   // ==========================================================================
   // Source position management
 
+  @SuppressWarnings("EnumOrdinal") // performance tuning
   public final void setStaticSourceFileFrom(Node other) {
     // Make sure source file prop nodes are not duplicated.
     if (other.propListHead != null
@@ -1323,6 +1685,7 @@ public class Node {
     setStaticSourceFile(other.getStaticSourceFile());
   }
 
+  @CanIgnoreReturnValue
   public final Node setStaticSourceFile(@Nullable StaticSourceFile file) {
     this.putProp(Prop.SOURCE_FILE, file);
     return this;
@@ -1334,37 +1697,56 @@ public class Node {
   }
 
   // TODO(johnlenz): make this final
-  @Nullable
-  public String getSourceFileName() {
+  public @Nullable String getSourceFileName() {
     StaticSourceFile file = getStaticSourceFile();
     return file == null ? null : file.getName();
   }
 
   /** Returns the source file associated with this input. */
-  @Nullable
-  public StaticSourceFile getStaticSourceFile() {
+  public @Nullable StaticSourceFile getStaticSourceFile() {
     return ((StaticSourceFile) this.getProp(Prop.SOURCE_FILE));
   }
 
-  /** @param inputId */
+  /** Sets the ID of the input this Node came from. */
   public void setInputId(InputId inputId) {
     this.putProp(Prop.INPUT_ID, inputId);
   }
 
-  /** @return The Id of the CompilerInput associated with this Node. */
-  @Nullable
-  public InputId getInputId() {
+  /** Returns the Id of the CompilerInput associated with this Node. */
+  public @Nullable InputId getInputId() {
     return ((InputId) this.getProp(Prop.INPUT_ID));
   }
 
-  /** The original name of this node, if the node has been renamed. */
-  @Nullable
-  public final String getOriginalName() {
+  /**
+   * The original name of this node, if the node has been renamed.
+   *
+   * <p>Do not use original name to make optimization decisions. The original intent was to preserve
+   * some naming for lightly optimized code to put into source maps. It is not rigorously defined
+   * and is not a suitable replacement for a canonical identifier. "Original name" is not associated
+   * with any scope and easily transfers to unrelated values. Its existance and use beyond its
+   * original purpose has delayed creating useful more precise alternatives.
+   *
+   * @deprecated "original name" is poorly defined.
+   */
+  @Deprecated
+  public final @Nullable String getOriginalName() {
     return this.originalName;
   }
 
   public final void setOriginalName(String s) {
     this.originalName = (s == null) ? null : RhinoStringPool.addOrGet(s);
+  }
+
+  public final void setOriginalNameFromStringPool(
+      RhinoStringPool.LazyInternedStringList stringPool, int offset) {
+    // RhinoStringPool.LazyInternedStringList guarantees that the result of calling get(offset) is
+    // interned, and sometimes caches results.
+    this.originalName = stringPool.get(offset);
+  }
+
+  // Copy the original
+  public final void setOriginalNameFromName(Node name) {
+    this.originalName = name.getString();
   }
 
   /** Whether this node should be indexed by static analysis / code indexing tools. */
@@ -1386,6 +1768,18 @@ public class Node {
   public final boolean isFromExterns() {
     StaticSourceFile file = getStaticSourceFile();
     return file == null ? false : file.isExtern();
+  }
+
+  /**
+   * Indicates that this node is for source that was written without any understanding of the
+   * compiler's various type-checking or optimization limitations, and should be optimized very
+   * cautiously by the compiler.
+   *
+   * <p>This attribute is per source file, not per node / subset of an source file's AST.
+   */
+  public final boolean isClosureUnawareCode() {
+    StaticSourceFile file = getStaticSourceFile();
+    return file != null && file.isClosureUnawareCode();
   }
 
   public final int getLength() {
@@ -1454,6 +1848,7 @@ public class Node {
    * <p>The charno takes the first 12 bits and the line number takes the rest. If the charno is
    * greater than (2^12)-1 it is adjusted to (2^12)-1
    */
+  @CanIgnoreReturnValue
   public final Node setLinenoCharno(int lineno, int charno) {
     if (lineno < 0 || charno < 0) {
       this.linenoCharno = -1;
@@ -1479,17 +1874,23 @@ public class Node {
    *
    * <pre>Node n = ...;
    * for (Node child : n.children()) { ...</pre>
+   *
+   * NOTE: Do not use 'children' for recursive descent of the AST. The overhead of using iterators
+   * rather then getFirstChild()/getNext() is very significant. We have deprecated it as it is easy
+   * to misuse.
    */
   @Deprecated
   public final Iterable<Node> children() {
     if (first == null) {
-      return Collections.emptySet();
+      return ImmutableSet.of();
     } else {
       return new SiblingNodeIterable(first);
     }
   }
 
-  /** @see Node#siblings() */
+  /**
+   * @see Node#children()
+   */
   private static final class SiblingNodeIterable implements Iterable<Node> {
     private final Node start;
 
@@ -1503,9 +1904,11 @@ public class Node {
     }
   }
 
-  /** @see Node#siblings() */
+  /**
+   * @see Node#children()
+   */
   private static final class SiblingNodeIterator implements Iterator<Node> {
-    @Nullable private Node current;
+    private @Nullable Node current;
 
     SiblingNodeIterator(Node start) {
       this.current = start;
@@ -1535,8 +1938,7 @@ public class Node {
   // ==========================================================================
   // Accessors
 
-  @Nullable
-  final PropListItem getPropListHeadForTesting() {
+  final @Nullable PropListItem getPropListHeadForTesting() {
     return propListHead;
   }
 
@@ -1544,8 +1946,7 @@ public class Node {
     this.propListHead = propListHead;
   }
 
-  @Nullable
-  public final Node getParent() {
+  public final @Nullable Node getParent() {
     return parent;
   }
 
@@ -1553,8 +1954,7 @@ public class Node {
     return parent != null;
   }
 
-  @Nullable
-  public final Node getGrandparent() {
+  public final @Nullable Node getGrandparent() {
     return parent == null ? null : parent.parent;
   }
 
@@ -1563,8 +1963,7 @@ public class Node {
    *
    * @param level 0 = this, 1 = the parent, etc.
    */
-  @Nullable
-  public final Node getAncestor(int level) {
+  public final @Nullable Node getAncestor(int level) {
     checkArgument(level >= 0);
     Node node = this;
     while (node != null && level-- > 0) {
@@ -1573,7 +1972,7 @@ public class Node {
     return node;
   }
 
-  /** @return True if this Node is {@code node} or a descendant of {@code node}. */
+  /** Is this Node the same as {@code node} or a descendant of {@code node}? */
   public final boolean isDescendantOf(Node node) {
     for (Node n = this; n != null; n = n.parent) {
       if (n == node) {
@@ -1604,9 +2003,11 @@ public class Node {
 
   /** Iterator to go up the ancestor tree. */
   public static final class AncestorIterable implements Iterable<Node> {
-    @Nullable private Node cur;
+    private @Nullable Node cur;
 
-    /** @param cur The node to start. */
+    /**
+     * @param cur The node to start.
+     */
     AncestorIterable(@Nullable Node cur) {
       this.cur = cur;
     }
@@ -1735,23 +2136,25 @@ public class Node {
   }
 
   /**
+   * Returns whether this node is equivalent semantically to the provided node.
+   *
    * @param compareType Whether to compare the JSTypes of the nodes.
    * @param recurse Whether to compare the children of the current node. If not, only the count of
    *     the children are compared.
    * @param jsDoc Whether to check that the JsDoc of the nodes are equivalent.
-   * @return Whether this node is equivalent semantically to the provided node.
    */
   final boolean isEquivalentTo(Node node, boolean compareType, boolean recurse, boolean jsDoc) {
     return isEquivalentTo(node, compareType, recurse, jsDoc, false);
   }
 
   /**
+   * Returns whether this node is equivalent semantically to the provided node.
+   *
    * @param compareType Whether to compare the JSTypes of the nodes.
    * @param recurse Whether to compare the children of the current node. If not, only the count of
    *     the children are compared.
    * @param jsDoc Whether to check that the JsDoc of the nodes are equivalent.
    * @param sideEffect Whether to check that the side-effect flags of the nodes are equivalent.
-   * @return Whether this node is equivalent semantically to the provided node.
    */
   public boolean isEquivalentTo(
       Node node, boolean compareType, boolean recurse, boolean jsDoc, boolean sideEffect) {
@@ -1779,9 +2182,26 @@ public class Node {
       return false;
     }
 
-    for (Function<Node, Object> getter : PROP_GETTERS_FOR_EQUALITY) {
-      if (!Objects.equals(getter.apply(this), getter.apply(node))) {
-        return false;
+    EnumSet<Prop> propSet = EnumSet.noneOf(Prop.class);
+    for (PropListItem propListItem = this.propListHead;
+        propListItem != null;
+        propListItem = propListItem.next) {
+      Prop prop = propValues[propListItem.propType];
+      propSet.add(prop);
+    }
+    for (PropListItem propListItem = node.propListHead;
+        propListItem != null;
+        propListItem = propListItem.next) {
+      Prop prop = propValues[propListItem.propType];
+      propSet.add(prop);
+    }
+
+    for (Prop prop : propSet) {
+      if (propMapForEqualityKeys.contains(prop)) {
+        Function<Node, Object> getter = PROP_MAP_FOR_EQUALITY.get(prop);
+        if (!Objects.equals(getter.apply(this), getter.apply(node))) {
+          return false;
+        }
       }
     }
 
@@ -1817,24 +2237,27 @@ public class Node {
    * <p>Accessor functions are used rather than {@link Prop}s to encode the correct way of reading
    * the prop.
    */
-  private static final ImmutableList<Function<Node, Object>> PROP_GETTERS_FOR_EQUALITY =
-      ImmutableList.of(
-          Node::isArrowFunction,
-          Node::isAsyncFunction,
-          Node::isAsyncGeneratorFunction,
-          Node::isGeneratorFunction,
-          Node::isOptionalChainStart,
-          Node::isStaticMember,
-          Node::isYieldAll,
-          (n) -> n.getIntProp(Prop.EXPORT_DEFAULT),
-          (n) -> n.getIntProp(Prop.EXPORT_ALL_FROM),
-          (n) -> n.getIntProp(Prop.SLASH_V),
-          (n) -> n.getIntProp(Prop.INCRDECR),
-          (n) -> n.getIntProp(Prop.QUOTED),
-          (n) -> n.getBooleanProp(Prop.FREE_CALL),
-          (n) -> n.getBooleanProp(Prop.COMPUTED_PROP_METHOD),
-          (n) -> n.getBooleanProp(Prop.COMPUTED_PROP_GETTER),
-          (n) -> n.getBooleanProp(Prop.COMPUTED_PROP_SETTER));
+  private static final ImmutableMap<Prop, Function<Node, Object>> PROP_MAP_FOR_EQUALITY =
+      new ImmutableMap.Builder<Prop, Function<Node, Object>>()
+          .put(Prop.ARROW_FN, Node::isArrowFunction)
+          .put(Prop.ASYNC_FN, Node::isAsyncFunction)
+          .put(Prop.GENERATOR_FN, Node::isGeneratorFunction)
+          .put(Prop.START_OF_OPT_CHAIN, Node::isOptionalChainStart)
+          .put(Prop.STATIC_MEMBER, Node::isStaticMember)
+          .put(Prop.YIELD_ALL, Node::isYieldAll)
+          .put(Prop.EXPORT_DEFAULT, (n) -> n.getIntProp(Prop.EXPORT_DEFAULT))
+          .put(Prop.EXPORT_ALL_FROM, (n) -> n.getIntProp(Prop.EXPORT_ALL_FROM))
+          .put(Prop.INCRDECR, (n) -> n.getIntProp(Prop.INCRDECR))
+          .put(Prop.QUOTED, (n) -> n.getIntProp(Prop.QUOTED))
+          .put(Prop.FREE_CALL, (n) -> n.getBooleanProp(Prop.FREE_CALL))
+          .put(Prop.COMPUTED_PROP_METHOD, (n) -> n.getBooleanProp(Prop.COMPUTED_PROP_METHOD))
+          .put(Prop.COMPUTED_PROP_GETTER, (n) -> n.getBooleanProp(Prop.COMPUTED_PROP_GETTER))
+          .put(Prop.COMPUTED_PROP_SETTER, (n) -> n.getBooleanProp(Prop.COMPUTED_PROP_SETTER))
+          .buildOrThrow();
+
+  /** Used for faster Map.containsKey() lookups in PROP_MAP_FOR_EQUALITY */
+  private static final EnumSet<Prop> propMapForEqualityKeys =
+      EnumSet.copyOf(PROP_MAP_FOR_EQUALITY.keySet());
 
   /**
    * This function takes a set of GETPROP nodes and produces a string that is each property
@@ -1844,8 +2267,7 @@ public class Node {
    * @return a null if this is not a qualified name, or a dot-separated string of the name and
    *     properties.
    */
-  @Nullable
-  public final String getQualifiedName() {
+  public final @Nullable String getQualifiedName() {
     switch (token) {
       case NAME:
         String name = getString();
@@ -1862,8 +2284,7 @@ public class Node {
     }
   }
 
-  @Nullable
-  public final QualifiedName getQualifiedNameObject() {
+  public final @Nullable QualifiedName getQualifiedNameObject() {
     return isQualifiedName() ? new QualifiedName.NodeQname(this) : null;
   }
 
@@ -1874,8 +2295,7 @@ public class Node {
    * @return {@code null} if this is not a qualified name or a StringBuilder if it is a complex
    *     qualified name.
    */
-  @Nullable
-  private StringBuilder getQualifiedNameForGetProp(int reserve) {
+  private @Nullable StringBuilder getQualifiedNameForGetProp(int reserve) {
     String propName = this.getString();
     reserve += 1 + propName.length(); // +1 for the '.'
     StringBuilder builder;
@@ -1904,9 +2324,10 @@ public class Node {
    *
    * @return a null if this is not a qualified name, or a dot-separated string of the name and
    *     properties.
+   * @deprecated "original name" is poorly defined. See #getOriginalName
    */
-  @Nullable
-  public final String getOriginalQualifiedName() {
+  @Deprecated
+  public final @Nullable String getOriginalQualifiedName() {
     if (token == Token.NAME) {
       String name = getOriginalName();
       if (name == null) {
@@ -2004,9 +2425,9 @@ public class Node {
         String name = getString();
         return start == 0 && !name.isEmpty() && name.length() == endIndex && qname.startsWith(name);
       case THIS:
-        return start == 0 && 4 == endIndex && qname.startsWith("this");
+        return start == 0 && endIndex == 4 && qname.startsWith("this");
       case SUPER:
-        return start == 0 && 5 == endIndex && qname.startsWith("super");
+        return start == 0 && endIndex == 5 && qname.startsWith("super");
       case GETPROP:
         String prop = this.getString();
         return start > 1
@@ -2076,19 +2497,18 @@ public class Node {
   }
 
   @DoNotCall
-  @GwtIncompatible
   @Override
   public final Object clone() {
     throw new UnsupportedOperationException("Did you mean cloneNode?");
   }
 
-  /** @return A detached clone of the Node, specifically excluding its children. */
+  /** Returns a detached clone of the Node, specifically excluding its children. */
   @CheckReturnValue
   public final Node cloneNode() {
     return cloneNode(false);
   }
 
-  /** @return A detached clone of the Node, specifically excluding its children. */
+  /** Returns a detached clone of the Node, specifically excluding its children. */
   @CheckReturnValue
   Node cloneNode(boolean cloneTypeExprs) {
     Node clone = new Node(token);
@@ -2112,7 +2532,7 @@ public class Node {
     }
   }
 
-  /** @return A detached clone of the Node and all its children. */
+  /** Returns a detached clone of the Node and all its children. */
   @CheckReturnValue
   public final Node cloneTree() {
     return cloneTree(false);
@@ -2140,10 +2560,17 @@ public class Node {
       lastChild.next = null;
       result.first = firstChild;
     }
+
+    Node shadow = this.getClosureUnawareShadow();
+    if (shadow != null) {
+      result.setClosureUnawareShadow(shadow.cloneTree(cloneTypeExprs));
+    }
+
     return result;
   }
 
   /** Copy the source info from `other` onto `this`. */
+  @CanIgnoreReturnValue
   public final Node srcref(Node other) {
     setStaticSourceFileFrom(other);
     this.originalName = other.originalName;
@@ -2153,6 +2580,7 @@ public class Node {
   }
 
   /** For all Nodes in the subtree of `this`, copy the source info from `other`. */
+  @CanIgnoreReturnValue
   public final Node srcrefTree(Node other) {
     this.srcref(other);
     for (Node child = first; child != null; child = child.next) {
@@ -2162,6 +2590,7 @@ public class Node {
   }
 
   /** Iff source info is not set on `this`, copy the source info from `other`. */
+  @CanIgnoreReturnValue
   public final Node srcrefIfMissing(Node other) {
     if (getStaticSourceFile() == null) {
       setStaticSourceFileFrom(other);
@@ -2183,6 +2612,7 @@ public class Node {
    * For all Nodes in the subtree of `this`, iff source info is not set, copy the source info from
    * `other`.
    */
+  @CanIgnoreReturnValue
   public final Node srcrefTreeIfMissing(Node other) {
     this.srcrefIfMissing(other);
     for (Node child = first; child != null; child = child.next) {
@@ -2198,8 +2628,7 @@ public class Node {
    * Returns the compiler inferred type on this node. Not to be confused with {@link
    * #getDeclaredTypeExpression()} which returns the syntactically specified type.
    */
-  @Nullable
-  public final JSType getJSType() {
+  public final @Nullable JSType getJSType() {
     return (this.jstypeOrColor instanceof JSType) ? (JSType) this.jstypeOrColor : null;
   }
 
@@ -2208,6 +2637,7 @@ public class Node {
     return checkNotNull(this.getJSType(), "no jstypeOrColor: %s", this);
   }
 
+  @CanIgnoreReturnValue
   public final Node setJSType(@Nullable JSType x) {
     checkState(this.jstypeOrColor == null || this.jstypeOrColor instanceof JSType, this);
     this.jstypeOrColor = x;
@@ -2218,11 +2648,11 @@ public class Node {
    * Returns the compiled inferred type on this node. Not to be confused with {@link
    * #getDeclaredTypeExpression()} which returns the syntactically specified type.
    */
-  @Nullable
-  public final Color getColor() {
+  public final @Nullable Color getColor() {
     return (this.jstypeOrColor instanceof Color) ? (Color) this.jstypeOrColor : null;
   }
 
+  @CanIgnoreReturnValue
   public final Node setColor(@Nullable Color x) {
     checkState(this.jstypeOrColor == null || this.jstypeOrColor instanceof Color, this);
     this.jstypeOrColor = x;
@@ -2230,6 +2660,7 @@ public class Node {
   }
 
   /** Copies a nodes JSType or Color (if present) */
+  @CanIgnoreReturnValue
   public final Node copyTypeFrom(Node other) {
     this.jstypeOrColor = other.jstypeOrColor;
     return this;
@@ -2240,12 +2671,12 @@ public class Node {
    *
    * @return the information or {@code null} if no JSDoc is attached to this node
    */
-  @Nullable
-  public final JSDocInfo getJSDocInfo() {
+  public final @Nullable JSDocInfo getJSDocInfo() {
     return (JSDocInfo) getProp(Prop.JSDOC_INFO);
   }
 
   /** Sets the {@link JSDocInfo} attached to this node. */
+  @CanIgnoreReturnValue
   public final Node setJSDocInfo(JSDocInfo info) {
     putProp(Prop.JSDOC_INFO, info);
     return this;
@@ -2279,12 +2710,16 @@ public class Node {
     return (JSType) getProp(Prop.TYPEDEF_TYPE);
   }
 
-  /** @param unused Whether a parameter was function to be unused. Set by RemoveUnusedVars */
+  /** Sets the value for isUnusedParameter() */
   public final void setUnusedParameter(boolean unused) {
     putBooleanProp(Prop.IS_UNUSED_PARAMETER, unused);
   }
 
-  /** @return Whether a parameter was function to be unused. Set by RemoveUnusedVars */
+  /**
+   * Is this node an unused function parameter declaration?
+   *
+   * <p>Set by RemoveUnusedVars
+   */
   public final boolean isUnusedParameter() {
     return getBooleanProp(Prop.IS_UNUSED_PARAMETER);
   }
@@ -2315,6 +2750,20 @@ public class Node {
    */
   public final boolean isSyntheticBlock() {
     return getBooleanProp(Prop.SYNTHETIC);
+  }
+
+  public final void setIsSynthesizedUnfulfilledNameDeclaration(boolean val) {
+    checkState(
+        token == Token.VAR && hasOneChild() && getFirstChild().isName(),
+        // we could relax this restriction if VarCheck wanted to generate other forms of synthetic
+        // externs
+        "Expected all synthetic unfulfilled declarations to be `var <name>`, found %s",
+        this);
+    putBooleanProp(Prop.SYNTHESIZED_UNFULFILLED_NAME_DECLARATION, val);
+  }
+
+  public final boolean isSynthesizedUnfulfilledNameDeclaration() {
+    return getBooleanProp(Prop.SYNTHESIZED_UNFULFILLED_NAME_DECLARATION);
   }
 
   /** Sets whether this node contained the "use strict" directive. */
@@ -2389,7 +2838,7 @@ public class Node {
     return getBooleanProp(Prop.IS_GENERATOR_MARKER);
   }
 
-  /** @see #isGeneratorSafe() */
+  /** Set the value for isGeneratorSafe() */
   public final void setGeneratorSafe(boolean isGeneratorSafe) {
     putBooleanProp(Prop.IS_GENERATOR_SAFE, isGeneratorSafe);
   }
@@ -2547,33 +2996,39 @@ public class Node {
     }
 
     /** All side-effect occur and the returned results are non-local. */
+    @CanIgnoreReturnValue
     public SideEffectFlags setAllFlags() {
       value = ALL_SIDE_EFFECTS;
       return this;
     }
 
     /** No side-effects occur */
+    @CanIgnoreReturnValue
     public SideEffectFlags clearAllFlags() {
       value = NO_SIDE_EFFECTS;
       return this;
     }
 
+    @CanIgnoreReturnValue
     public SideEffectFlags setMutatesGlobalState() {
       // Modify global means everything must be assumed to be modified.
       value |= MUTATES_GLOBAL_STATE | MUTATES_ARGUMENTS | MUTATES_THIS;
       return this;
     }
 
+    @CanIgnoreReturnValue
     public SideEffectFlags setThrows() {
       value |= THROWS;
       return this;
     }
 
+    @CanIgnoreReturnValue
     public SideEffectFlags setMutatesThis() {
       value |= MUTATES_THIS;
       return this;
     }
 
+    @CanIgnoreReturnValue
     public SideEffectFlags setMutatesArguments() {
       value |= MUTATES_ARGUMENTS;
       return this;
@@ -2747,11 +3202,11 @@ public class Node {
     setConstantVarFlag(ConstantVarFlags.INFERRED, value);
   }
 
-  public final boolean isQuotedString() {
+  public final boolean isQuotedStringKey() {
     return (this instanceof StringNode) && this.getBooleanProp(Prop.QUOTED);
   }
 
-  public final void setQuotedString() {
+  public final void setQuotedStringKey() {
     checkState(this instanceof StringNode, this);
     this.putBooleanProp(Prop.QUOTED, true);
   }
@@ -2994,6 +3449,10 @@ public class Node {
     return this.token == Token.INSTANCEOF;
   }
 
+  public final boolean isInterface() {
+    return this.token == Token.INTERFACE;
+  }
+
   public final boolean isInterfaceMembers() {
     return this.token == Token.INTERFACE_MEMBERS;
   }
@@ -3048,6 +3507,18 @@ public class Node {
 
   public final boolean isNE() {
     return this.token == Token.NE;
+  }
+
+  public final boolean isSHNE() {
+    return this.token == Token.SHNE;
+  }
+
+  public final boolean isEQ() {
+    return this.token == Token.EQ;
+  }
+
+  public final boolean isSHEQ() {
+    return this.token == Token.SHEQ;
   }
 
   public final boolean isNeg() {
@@ -3212,5 +3683,9 @@ public class Node {
 
   public final boolean isYield() {
     return this.token == Token.YIELD;
+  }
+
+  public final boolean isDeclare() {
+    return this.token == Token.DECLARE;
   }
 }

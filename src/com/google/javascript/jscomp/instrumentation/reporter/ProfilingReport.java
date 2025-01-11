@@ -18,10 +18,10 @@ package com.google.javascript.jscomp.instrumentation.reporter;
 
 import static java.util.stream.Collectors.joining;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.instrumentation.reporter.proto.FileProfile;
 import com.google.javascript.jscomp.instrumentation.reporter.proto.InstrumentationPoint;
+import com.google.javascript.jscomp.instrumentation.reporter.proto.InstrumentationPointStats;
 import com.google.javascript.jscomp.instrumentation.reporter.proto.ReportProfile;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -35,7 +35,6 @@ import java.util.stream.Collectors;
  * A class that maintains all information about the production instrumentation results which will be
  * converted to a JSON.
  */
-@GwtIncompatible
 final class ProfilingReport {
 
   /**
@@ -68,10 +67,10 @@ final class ProfilingReport {
 
     for (ReportProfile profile : profiles) {
       for (FileProfile fileProfile : profile.getFileProfileList()) {
-        for (InstrumentationPoint point : fileProfile.getInstrumentationPointList()) {
-          InstrumentationPoint pointNoData = point.toBuilder().clearTimesExecuted().build();
-          InstrumentationPointMetrics metric = metrics.get(pointNoData);
-          metric.totalTimesExecuted += point.getTimesExecuted();
+        for (InstrumentationPointStats pointStats :
+            fileProfile.getInstrumentationPointsStatsList()) {
+          InstrumentationPointMetrics metric = metrics.get(pointStats.getPoint());
+          metric.totalTimesExecuted += pointStats.getTimesExecuted();
           metric.numberOfReports++;
         }
       }
@@ -123,4 +122,6 @@ final class ProfilingReport {
     private long totalTimesExecuted = 0;
     private int numberOfReports = 0;
   }
+
+  private ProfilingReport() {}
 }

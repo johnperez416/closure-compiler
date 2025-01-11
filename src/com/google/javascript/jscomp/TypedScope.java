@@ -18,19 +18,18 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.javascript.jscomp.modules.Module;
-import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.StaticScope;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.ObjectType;
 import com.google.javascript.rhino.jstype.StaticTypedScope;
-import com.google.javascript.rhino.jstype.StaticTypedSlot;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * TypedScope contains information about variables and their types. Scopes can be nested; a scope
@@ -53,20 +52,22 @@ import javax.annotation.Nullable;
  */
 public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements StaticTypedScope {
 
-  private final TypedScope parent;
+  private final @Nullable TypedScope parent;
   private final int depth;
-  @Nullable private final Module module;
+  private final @Nullable Module module;
 
   /** Whether this is a bottom scope for the purposes of type inference. */
   private final boolean isBottom;
 
-  private final Set<String> reservedNames; // Not immutable; will shrink over time.
+  // Will shrink over time. Set to "ImmutableSet.of()" once empty (so don't try removing
+  // elements from an empty set)
+  private Set<String> reservedNames;
 
   // Scope.java contains an arguments field.
   // We haven't added it here because it's unused by the passes that need typed scopes.
 
   TypedScope(TypedScope parent, Node rootNode) {
-    this(parent, rootNode, new HashSet<>(), null);
+    this(parent, rootNode, new LinkedHashSet<>(), null);
   }
 
   /**
@@ -82,7 +83,8 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
     this.parent = parent;
     this.depth = parent.depth + 1;
     this.isBottom = false;
-    this.reservedNames = reservedNames;
+    this.reservedNames =
+        reservedNames.isEmpty() ? ImmutableSet.of() : new LinkedHashSet<>(reservedNames);
     this.module = module;
   }
 
@@ -98,7 +100,7 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
     this.parent = null;
     this.depth = 0;
     this.isBottom = isBottom;
-    this.reservedNames = new HashSet<>();
+    this.reservedNames = ImmutableSet.of();
     this.module = null;
   }
 
@@ -119,9 +121,13 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
   void validateCompletelyBuilt() {
     checkState(
         reservedNames.isEmpty(),
-        "Expected %s to have no reserved names, found: %s",
+        "Expected %s to have no reserved names, found: %s. This probably indicates a bug in"
+            + " TypedScopeCreator where it is failing to declare a variable.",
         this,
         reservedNames);
+    // let a (16-bit) VM garbage collect 64 bytes per TypedScope. (ImmutableSet.of() returns a
+    // singleton)
+    reservedNames = ImmutableSet.of();
   }
 
   /** Whether this is the bottom of the lattice. */
@@ -144,11 +150,9 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
     return parent;
   }
 
-  /**
-   * Gets the type of {@code this} in the current scope.
-   */
+  /** Gets the type of {@code this} in the current scope. */
   @Override
-  public JSType getTypeOfThis() {
+  public @Nullable JSType getTypeOfThis() {
     Node root = getRootNode();
     if (isGlobal()) {
       return ObjectType.cast(root.getJSType());
@@ -160,6 +164,15 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
         // Executed when the current scope has not been typechecked.
         return null;
       }
+    } else if (this.isStaticBlockScope()) {
+      return getParent().getRootNode().getJSType();
+    } else if (this.isMemberFieldDefScope() || this.isComputedFieldDefRhsScope()) {
+      JSType classType = getParent().getRootNode().getJSType();
+      if (root.isStaticMember()) {
+        return classType;
+      } else {
+        return classType.assertFunctionType().getInstanceType();
+      }
     } else {
       return getParent().getTypeOfThis();
     }
@@ -168,14 +181,18 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
   TypedVar declare(String name, Node nameNode,
       JSType type, CompilerInput input, boolean inferred) {
     checkState(name != null && !name.isEmpty());
-    reservedNames.remove(name);
+    if (!reservedNames.isEmpty()) {
+      // (reservedNames only contains simple, non-qualified names; so it's completely normal to
+      // declare qualified names that were not 'reserved')
+      reservedNames.remove(name);
+    }
     TypedVar var = new TypedVar(inferred, name, nameNode, type, this, getVarCount(), input);
     declareInternal(name, var);
     return var;
   }
 
   @Override
-  TypedVar makeImplicitVar(ImplicitVar var) {
+  @Nullable TypedVar makeImplicitVar(ImplicitVar var) {
     if (this.isGlobal()) {
       // TODO(sdh): This is incorrect for 'global this', but since that's currently not handled
       // by this code, it's okay to bail out now until we find the root cause.  See b/74980936.
@@ -193,7 +210,7 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
     return name != null && !name.equals(ImplicitVar.EXPORTS) && name.isMadeByScope(this);
   }
 
-  private JSType getImplicitVarType(ImplicitVar var) {
+  private @Nullable JSType getImplicitVarType(ImplicitVar var) {
     switch (var) {
       case ARGUMENTS:
         // Look for an extern named "arguments" and use its type if available.
@@ -249,16 +266,6 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
         && !var.isExtern();
   }
 
-  public JSType getNamespaceOrTypedefType(String typeName) {
-    StaticTypedSlot slot = getSlot(typeName);
-    return slot == null ? null : slot.getType();
-  }
-
-  public JSDocInfo getJsdocOfTypeDeclaration(String typeName) {
-    StaticTypedSlot slot = getSlot(typeName);
-    return slot == null ? null : slot.getJSDocInfo();
-  }
-
   /**
    * Returns the slot for {@code name}, considering shadowing of qualified names.
    *
@@ -278,7 +285,7 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
    * returns "a.b". This method returns null because the global "a" is shadowed.
    */
   @Override
-  public final TypedVar getVar(String name) {
+  public final @Nullable TypedVar getVar(String name) {
     TypedVar ownSlot = getOwnSlot(name);
     if (ownSlot != null) {
       // Micro-optimization: variables declared directly in this scope cannot have been shadowed.
@@ -303,8 +310,24 @@ public class TypedScope extends AbstractScope<TypedScope, TypedVar> implements S
     }
   }
 
+  final @Nullable JSType getTypeThroughNamespace(String moduleId) {
+    int split = moduleId.lastIndexOf('.');
+    if (split >= 0) {
+      String parentName = moduleId.substring(0, split);
+      String prop = moduleId.substring(split + 1);
+      JSType parentType = getTypeThroughNamespace(parentName);
+      if (parentType == null || parentType.toMaybeObjectType() == null) {
+        return null;
+      }
+      return parentType.assertObjectType().getPropertyType(prop);
+    } else {
+      TypedVar var = this.getSlot(moduleId);
+      return var != null ? var.getType() : null;
+    }
+  }
+
   @Override
-  public StaticScope getTopmostScopeOfEventualDeclaration(String name) {
+  public @Nullable StaticScope getTopmostScopeOfEventualDeclaration(String name) {
     if (getOwnSlot(name) != null || reservedNames.contains(name)) {
       return this;
     } else if (this.getParent() == null) {

@@ -23,7 +23,6 @@ import static java.lang.Math.min;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
 import com.google.common.base.Function;
@@ -35,18 +34,24 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.io.ByteStreams;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
+import com.google.javascript.jscomp.CodePrinter.LicenseTracker;
+import com.google.javascript.jscomp.Compiler.ChunkGraphAwareLicenseTracker;
+import com.google.javascript.jscomp.Compiler.ScriptNodeLicensesOnlyTracker;
+import com.google.javascript.jscomp.Compiler.SingleBinaryLicenseTracker;
 import com.google.javascript.jscomp.CompilerOptions.JsonStreamMode;
 import com.google.javascript.jscomp.CompilerOptions.OutputJs;
 import com.google.javascript.jscomp.CompilerOptions.TweakProcessing;
 import com.google.javascript.jscomp.deps.ModuleLoader;
 import com.google.javascript.jscomp.deps.SourceCodeEscapers;
 import com.google.javascript.jscomp.ijs.IjsErrors;
+import com.google.javascript.jscomp.parsing.Config;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.StaticSourceFile.SourceKind;
 import com.google.javascript.rhino.TokenStream;
@@ -69,17 +74,17 @@ import java.io.Writer;
 import java.lang.reflect.Type;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Implementations of AbstractCommandLineRunner translate flags into Java API calls on the Compiler.
@@ -136,23 +141,19 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
               + "%outname% in the value.");
 
   static final String WAITING_FOR_INPUT_WARNING = "The compiler is waiting for input via stdin.";
+  // Use an 8MiB buffer since the concatenated TypedAst file can be very large.
+  private static final int GZIPPED_TYPEDAST_BUFFER_SIZE = 8 * 1024 * 1024;
 
-  @GwtIncompatible("Unnecessary")
   private final CommandLineConfig config;
 
-  @GwtIncompatible("Unnecessary")
   private final InputStream in;
 
-  @GwtIncompatible("Unnecessary")
   private final PrintStream defaultJsOutput;
 
-  @GwtIncompatible("Unnecessary")
   private final PrintStream err;
 
-  @GwtIncompatible("Unnecessary")
   private A compiler;
 
-  @GwtIncompatible("Unnecessary")
   private Charset inputCharset;
 
   // NOTE(nicksantos): JSCompiler has always used ASCII as the default
@@ -162,59 +163,43 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   //
   // New outputs should use outputCharset2, which is how I would have
   // designed this if I had a time machine.
-  @GwtIncompatible("Unnecessary")
   private Charset outputCharset2;
 
-  @GwtIncompatible("Unnecessary")
   private Charset legacyOutputCharset;
 
-  @GwtIncompatible("Unnecessary")
   private boolean testMode = false;
 
-  @GwtIncompatible("Unnecessary")
-  private Supplier<List<SourceFile>> externsSupplierForTesting = null;
+  private @Nullable Supplier<List<SourceFile>> externsSupplierForTesting = null;
 
-  @GwtIncompatible("Unnecessary")
-  private Supplier<List<SourceFile>> inputsSupplierForTesting = null;
+  private @Nullable Supplier<List<SourceFile>> inputsSupplierForTesting = null;
 
-  @GwtIncompatible("Unnecessary")
-  private Supplier<List<JSChunk>> modulesSupplierForTesting = null;
+  private @Nullable Supplier<List<JSChunk>> chunksSupplierForTesting = null;
 
-  @GwtIncompatible("Unnecessary")
   private Function<Integer, Void> exitCodeReceiver = SystemExitCodeReceiver.INSTANCE;
 
-  @GwtIncompatible("Unnecessary")
-  private Map<String, String> rootRelativePathsMap = null;
+  private @Nullable Map<String, String> rootRelativePathsMap = null;
 
-  @GwtIncompatible("Unnecessary")
-  private Map<String, String> parsedModuleWrappers = null;
+  private @Nullable Map<String, String> parsedModuleWrappers = null;
 
-  @GwtIncompatible("Unnecessary")
-  private Map<String, String> parsedModuleOutputFiles = null;
+  private @Nullable ImmutableMap<String, String> parsedModuleOutputFiles = null;
 
-  @GwtIncompatible("Unnecessary")
-  private ImmutableMap<String, SourceFile> typedAstFilesystem = null;
+  private @Nullable ImmutableMap<String, String> parsedModuleConformanceFiles = null;
 
-  @GwtIncompatible("Unnecessary")
   private final Gson gson;
 
   static final String OUTPUT_MARKER = "%output%";
   private static final String OUTPUT_MARKER_JS_STRING = "%output|jsstring%";
 
-  @GwtIncompatible("Unnecessary")
   private final List<JsonFileSpec> filesToStreamOut = new ArrayList<>();
 
-  @GwtIncompatible("Unnecessary")
   AbstractCommandLineRunner() {
     this(System.in, System.out, System.err);
   }
 
-  @GwtIncompatible("Unnecessary")
   AbstractCommandLineRunner(PrintStream out, PrintStream err) {
     this(System.in, out, err);
   }
 
-  @GwtIncompatible("Unnecessary")
   AbstractCommandLineRunner(InputStream in, PrintStream out, PrintStream err) {
     this.config = new CommandLineConfig();
     this.in = checkNotNull(in);
@@ -228,23 +213,22 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @param externsSupplier A provider for externs.
    * @param inputsSupplier A provider for source inputs.
-   * @param modulesSupplier A provider for modules. Only one of inputsSupplier and modulesSupplier
-   *     may be non-null.
+   * @param chunksSupplier A provider for modules. Only one of inputsSupplier and chunksSupplier may
+   *     be non-null.
    * @param exitCodeReceiver A receiver for the status code that would have been passed to
    *     System.exit in non-test mode.
    */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
   void enableTestMode(
       Supplier<List<SourceFile>> externsSupplier,
       Supplier<List<SourceFile>> inputsSupplier,
-      Supplier<List<JSChunk>> modulesSupplier,
+      Supplier<List<JSChunk>> chunksSupplier,
       Function<Integer, Void> exitCodeReceiver) {
-    checkArgument(inputsSupplier == null != (modulesSupplier == null));
+    checkArgument(inputsSupplier == null != (chunksSupplier == null));
     testMode = true;
     this.externsSupplierForTesting = externsSupplier;
     this.inputsSupplierForTesting = inputsSupplier;
-    this.modulesSupplierForTesting = modulesSupplier;
+    this.chunksSupplierForTesting = chunksSupplier;
     this.exitCodeReceiver = exitCodeReceiver;
   }
 
@@ -252,44 +236,37 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @param newExitCodeReceiver receives a non-zero integer to indicate a problem during execution
    *     or 0i to indicate success.
    */
-  @GwtIncompatible("Unnecessary")
   public void setExitCodeReceiver(Function<Integer, Void> newExitCodeReceiver) {
     this.exitCodeReceiver = checkNotNull(newExitCodeReceiver);
   }
 
   /** Returns whether we're in test mode. */
-  @GwtIncompatible("Unnecessary")
   protected boolean isInTestMode() {
     return testMode;
   }
 
   /** Returns whether output should be a JSON stream. */
-  @GwtIncompatible("Unnecessary")
   private boolean isOutputInJson() {
     return config.jsonStreamMode == JsonStreamMode.OUT
         || config.jsonStreamMode == JsonStreamMode.BOTH;
   }
 
   /** Get the command line config, so that it can be initialized. */
-  @GwtIncompatible("Unnecessary")
   protected CommandLineConfig getCommandLineConfig() {
     return config;
   }
 
   /** Returns the instance of the Compiler to use when {@link #run()} is called. */
-  @GwtIncompatible("Unnecessary")
   protected abstract A createCompiler();
 
   /**
    * Performs any transformation needed on the given compiler input and appends it to the given
    * output bundle.
    */
-  @GwtIncompatible("Unnecessary")
   protected abstract void prepForBundleAndAppendTo(
       Appendable out, CompilerInput input, String content) throws IOException;
 
   /** Writes whatever runtime libraries are needed to bundle. */
-  @GwtIncompatible("Unnecessary")
   protected abstract void appendRuntimeTo(Appendable out) throws IOException;
 
   /**
@@ -297,11 +274,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * called before createOptions(), so getCompiler() will not return null when createOptions() is
    * called.
    */
-  @GwtIncompatible("Unnecessary")
   protected abstract B createOptions();
 
   /** The warning classes that are available from the command-line. */
-  @GwtIncompatible("Unnecessary")
   protected DiagnosticGroups getDiagnosticGroups() {
     if (compiler == null) {
       return new DiagnosticGroups();
@@ -309,25 +284,25 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return compiler.getDiagnosticGroups();
   }
 
-  @GwtIncompatible("Unnecessary")
   protected abstract void addAllowlistWarningsGuard(CompilerOptions options, File allowlistFile);
 
-  @GwtIncompatible("Unnecessary")
   protected static void setWarningGuardOptions(
       CompilerOptions options,
       ArrayList<FlagEntry<CheckLevel>> warningGuards,
       DiagnosticGroups diagnosticGroups) {
     if (warningGuards != null) {
+      final ImmutableSet<String> groupNames = DiagnosticGroups.getRegisteredGroups().keySet();
       for (FlagEntry<CheckLevel> entry : warningGuards) {
         if ("*".equals(entry.value)) {
-          Set<String> groupNames = DiagnosticGroups.getRegisteredGroups().keySet();
           for (String groupName : groupNames) {
             if (!DiagnosticGroups.wildcardExcludedGroups.contains(groupName)) {
               diagnosticGroups.setWarningLevel(options, groupName, entry.flag);
             }
           }
-        } else {
+        } else if (groupNames.contains(entry.value)) {
           diagnosticGroups.setWarningLevel(options, entry.value, entry.flag);
+        } else {
+          throw new FlagUsageException("Unknown diagnostic group: '" + entry.value + "'");
         }
       }
     }
@@ -338,9 +313,19 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * If you want to ignore the flags API, or interpret flags your own way, then you should override
    * this method.
    */
-  @GwtIncompatible("Unnecessary")
   protected void setRunOptions(CompilerOptions options) throws IOException {
     DiagnosticGroups diagnosticGroups = getDiagnosticGroups();
+
+    if (config.shouldSaveAfterStage1() || config.shouldContinueCompilation()) {
+      if (options.checksOnly) {
+        throw new FlagUsageException(
+            "checks_only mode is incompatible with multi-stage compilation");
+      }
+      if (options.getExternExportsPath() != null) {
+        throw new FlagUsageException(
+            "generating externs from exports is incompatible with multi-stage compilation");
+      }
+    }
 
     setWarningGuardOptions(options, config.warningGuards, diagnosticGroups);
 
@@ -385,24 +370,27 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     if (config.jsOutputFile.length() > 0) {
       if (config.skipNormalOutputs) {
         throw new FlagUsageException(
-            "skip_normal_outputs and js_output_file" + " cannot be used together.");
+            "skip_normal_outputs and js_output_file cannot be used together.");
       }
     }
 
     if (config.skipNormalOutputs && config.printAst) {
-      throw new FlagUsageException(
-          "skip_normal_outputs and print_ast cannot" + " be used together.");
+      throw new FlagUsageException("skip_normal_outputs and print_ast cannot be used together.");
     }
 
     if (config.skipNormalOutputs && config.printTree) {
+      throw new FlagUsageException("skip_normal_outputs and print_tree cannot be used together.");
+    }
+
+    if (config.skipNormalOutputs && config.printTreeJson) {
       throw new FlagUsageException(
-          "skip_normal_outputs and print_tree cannot" + " be used together.");
+          "skip_normal_outputs and print_tree_json_path cannot be used together.");
     }
 
     if (config.createSourceMap.length() > 0) {
-      options.sourceMapOutputPath = config.createSourceMap;
+      options.setSourceMapOutputPath(config.createSourceMap);
     } else if (isOutputInJson()) {
-      options.sourceMapOutputPath = "%outname%";
+      options.setSourceMapOutputPath("%outname%");
     }
     options.sourceMapDetailLevel = config.sourceMapDetailLevel;
     options.sourceMapFormat = config.sourceMapFormat;
@@ -413,10 +401,10 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     ImmutableMap.Builder<String, SourceMapInput> inputSourceMaps = new ImmutableMap.Builder<>();
     for (Map.Entry<String, String> files : config.sourceMapInputFiles.entrySet()) {
       SourceFile sourceMap =
-          SourceFile.builder().withKind(SourceKind.NON_CODE).buildFromFile(files.getValue());
+          SourceFile.builder().withKind(SourceKind.NON_CODE).withPath(files.getValue()).build();
       inputSourceMaps.put(files.getKey(), new SourceMapInput(sourceMap));
     }
-    options.inputSourceMaps = inputSourceMaps.build();
+    options.inputSourceMaps = inputSourceMaps.buildOrThrow();
 
     if (!config.variableMapInputFile.isEmpty()) {
       options.inputVariableMap = VariableMap.load(config.variableMapInputFile);
@@ -427,26 +415,25 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     }
 
     if (!config.outputManifests.isEmpty()) {
-      Set<String> uniqueNames = new HashSet<>();
+      Set<String> uniqueNames = new LinkedHashSet<>();
       for (String filename : config.outputManifests) {
         if (!uniqueNames.add(filename)) {
           throw new FlagUsageException(
-              "output_manifest flags specify " + "duplicate file names: " + filename);
+              "output_manifest flags specify duplicate file names: " + filename);
         }
       }
     }
 
     if (!config.outputBundles.isEmpty()) {
-      Set<String> uniqueNames = new HashSet<>();
+      Set<String> uniqueNames = new LinkedHashSet<>();
       for (String filename : config.outputBundles) {
         if (!uniqueNames.add(filename)) {
           throw new FlagUsageException(
-              "output_bundle flags specify " + "duplicate file names: " + filename);
+              "output_bundle flags specify duplicate file names: " + filename);
         }
       }
     }
 
-    options.transformAMDToCJSModules = config.transformAMDToCJSModules;
     options.setProcessCommonJSModules(config.processCommonJSModules);
     options.moduleRoots = config.moduleRoots;
     options.angularPass = config.angularPass;
@@ -461,24 +448,29 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
           new JsonErrorReportGenerator(getErrorPrintStream(), compiler);
       compiler.setErrorManager(new SortingErrorManager(ImmutableSet.of(errorGenerator)));
     }
+    if (config.printTree || config.printTreeJson) {
+      options.setParseJsDocDocumentation(Config.JsDocParsing.INCLUDE_ALL_COMMENTS);
+    }
+    if (config.skipNormalOutputs) {
+      // If skipping normal outputs, it's unnecessary to do a full AST parse of each input file.
+      // The regex parser may still run if ordering/pruning inputs.
+      compiler.setPreferRegexParser(true);
+    }
   }
 
-  @GwtIncompatible("Unnecessary")
   protected final A getCompiler() {
     return compiler;
   }
 
   /**
    * @return a mutable list
-   * @throws IOException
    */
-  @GwtIncompatible("Unnecessary")
   public static List<SourceFile> getBuiltinExterns(CompilerOptions.Environment env)
       throws IOException {
     try (InputStream input = getExternsInput()) {
       ZipInputStream zip = new ZipInputStream(input);
       String envPrefix = Ascii.toLowerCase(env.toString()) + "/";
-      Map<String, SourceFile> mapFromExternsZip = new HashMap<>();
+      Map<String, SourceFile> mapFromExternsZip = new LinkedHashMap<>();
       for (ZipEntry entry = null; (entry = zip.getNextEntry()) != null; ) {
         String filename = entry.getName();
 
@@ -514,7 +506,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    */
   protected abstract String getVersionText();
 
-  @GwtIncompatible("Unnecessary")
   private static InputStream getExternsInput() {
     InputStream input = AbstractCommandLineRunner.class.getResourceAsStream("/externs.zip");
     if (input == null) {
@@ -526,7 +517,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Runs the Compiler and calls System.exit() with the exit status of the compiler. */
-  @GwtIncompatible("Unnecessary")
   public final void run() {
     int result;
     try {
@@ -543,12 +533,10 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Returns the PrintStream for writing errors associated with this AbstractCommandLineRunner. */
-  @GwtIncompatible("Unnecessary")
   protected final PrintStream getErrorPrintStream() {
     return err;
   }
 
-  @GwtIncompatible("Unnecessary")
   public List<JsonFileSpec> parseJsonFilesFromInputStream() throws IOException {
     List<JsonFileSpec> jsonFiles = new ArrayList<>();
     try (JsonReader reader = new JsonReader(new InputStreamReader(this.in, inputCharset))) {
@@ -571,7 +559,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @param jsChunkSpecs A list chunk specs.
    * @return An array of inputs
    */
-  @GwtIncompatible("Unnecessary")
   private List<SourceFile> createInputs(
       List<FlagEntry<JsSourceType>> files, boolean allowStdIn, List<JsChunkSpec> jsChunkSpecs)
       throws IOException {
@@ -586,7 +573,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @param jsChunkSpecs A list chunk specs.
    * @return An array of inputs
    */
-  @GwtIncompatible("Unnecessary")
   private List<SourceFile> createInputs(
       List<FlagEntry<JsSourceType>> files,
       List<JsonFileSpec> jsonFiles,
@@ -607,10 +593,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @param jsChunkSpecs A list chunk specs.
    * @return An array of inputs
    */
-  @GwtIncompatible("Unnecessary")
   protected List<SourceFile> createInputs(
       List<FlagEntry<JsSourceType>> files,
-      List<JsonFileSpec> jsonFiles,
+      @Nullable List<JsonFileSpec> jsonFiles,
       boolean allowStdIn,
       List<JsChunkSpec> jsChunkSpecs)
       throws IOException {
@@ -624,7 +609,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       FlagEntry<JsSourceType> file = files.get(i);
       String filename = file.value;
       if (file.flag == JsSourceType.JS_ZIP) {
-        if (this.typedAstFilesystem != null) {
+        if (this.config.typedAstListInputFilename != null) {
           throw new FlagUsageException("Can't use TypedASTs with --zip.");
         }
 
@@ -647,24 +632,16 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
           }
         }
       } else if (!"-".equals(filename)) {
-        final SourceFile newFile;
-        if (this.typedAstFilesystem != null) {
-          newFile = this.typedAstFilesystem.get(filename);
-          if (newFile == null) {
-            throw new FlagUsageException("TypedASTs did not contain " + filename);
-          }
-        } else {
-          SourceKind kind = file.flag == JsSourceType.WEAKDEP ? SourceKind.WEAK : SourceKind.STRONG;
-          newFile =
-              SourceFile.builder()
-                  .withPath(filename)
-                  .withCharset(inputCharset)
-                  .withKind(kind)
-                  .build();
-        }
+        SourceKind kind = file.flag == JsSourceType.WEAKDEP ? SourceKind.WEAK : SourceKind.STRONG;
+        SourceFile newFile =
+            SourceFile.builder()
+                .withPath(filename)
+                .withCharset(inputCharset)
+                .withKind(kind)
+                .build();
         inputs.add(newFile);
       } else {
-        if (this.typedAstFilesystem != null) {
+        if (this.config.typedAstListInputFilename != null) {
           throw new FlagUsageException("Can't use TypedASTs with stdin.");
         }
         if (!config.defaultToStdin) {
@@ -714,13 +691,12 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @throws FlagUsageException If there are both input --ijs files and module specs.
    */
-  @GwtIncompatible("Unnecessary")
   private ImmutableList<JSError> deduplicateIjsFiles(
       List<FlagEntry<JsSourceType>> files, List<String> moduleRoots, boolean hasModuleSpecs) {
     ImmutableList.Builder<JSError> errors = ImmutableList.builder();
 
     // First pass: collect the (module root relative) names of --js and --weakdep files.
-    Map<String, String> relativeToAbsoluteName = new HashMap<>();
+    Map<String, String> relativeToAbsoluteName = new LinkedHashMap<>();
     for (FlagEntry<JsSourceType> file : files) {
       // TODO(tjgq): Handle zip files.
       if (file.flag == JsSourceType.JS || file.flag == JsSourceType.WEAKDEP) {
@@ -771,8 +747,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Creates JS source code inputs from a list of files. */
-  @GwtIncompatible("Unnecessary")
-  private List<SourceFile> createSourceInputs(
+  private @Nullable List<SourceFile> createSourceInputs(
       List<JsChunkSpec> jsChunkSpecs,
       List<FlagEntry<JsSourceType>> files,
       List<JsonFileSpec> jsonFiles,
@@ -802,7 +777,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Creates JS extern inputs from a list of files. */
-  @GwtIncompatible("Unnecessary")
   private List<SourceFile> createExternInputs(List<String> files) throws IOException {
     List<FlagEntry<JsSourceType>> externFiles = new ArrayList<>();
     for (String file : files) {
@@ -816,31 +790,30 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /**
-   * Creates module objects from a list of chunk specifications.
+   * Creates chunk objects from a list of chunk specifications.
    *
    * @param specs A list of chunk specifications, not null or empty.
    * @param inputs A list of JS file paths, not null
    * @return An array of module objects
    */
-  public static List<JSChunk> createJsModules(List<JsChunkSpec> specs, List<SourceFile> inputs)
-      throws IOException {
+  public static List<JSChunk> createJsChunks(List<JsChunkSpec> specs, List<CompilerInput> inputs) {
     checkState(specs != null);
     checkState(!specs.isEmpty());
     checkState(inputs != null);
 
-    List<String> moduleNames = new ArrayList<>(specs.size());
-    Map<String, JSChunk> modulesByName = new LinkedHashMap<>();
+    List<String> chunkNames = new ArrayList<>(specs.size());
+    Map<String, JSChunk> chunksByName = new LinkedHashMap<>();
     Map<String, Integer> modulesFileCountMap = new LinkedHashMap<>();
     int numJsFilesExpected = 0;
     int minJsFilesRequired = 0;
     for (JsChunkSpec spec : specs) {
-      if (modulesByName.containsKey(spec.name)) {
+      if (chunksByName.containsKey(spec.name)) {
         throw new FlagUsageException("Duplicate module name: " + spec.name);
       }
-      JSChunk module = new JSChunk(spec.name);
+      JSChunk chunk = new JSChunk(spec.name);
 
       for (String dep : spec.deps) {
-        JSChunk other = modulesByName.get(dep);
+        JSChunk other = chunksByName.get(dep);
         if (other == null) {
           throw new FlagUsageException(
               "Module '"
@@ -849,7 +822,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
                   + dep
                   + "'. Be sure to list modules in dependency order.");
         }
-        module.addDependency(other);
+        chunk.addDependency(other);
       }
 
       // We will allow modules of zero input.
@@ -866,9 +839,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       // Add modules in reverse order so that source files are allocated to
       // modules in reverse order. This allows the first module
       // (presumably the base module) to have a size of 'auto'
-      moduleNames.add(0, spec.name);
+      chunkNames.add(0, spec.name);
       modulesFileCountMap.put(spec.name, spec.numJsFiles);
-      modulesByName.put(spec.name, module);
+      chunksByName.put(spec.name, chunk);
     }
 
     final int totalNumJsFiles = inputs.size();
@@ -895,25 +868,25 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     int numJsFilesLeft = totalNumJsFiles;
     int moduleIndex = 0;
-    for (String moduleName : moduleNames) {
+    for (String chunkName : chunkNames) {
       // Parse module inputs.
-      int numJsFiles = modulesFileCountMap.get(moduleName);
-      JSChunk module = modulesByName.get(moduleName);
+      int numJsFiles = modulesFileCountMap.get(chunkName);
+      JSChunk chunk = chunksByName.get(chunkName);
 
       // Check if the first chunk specified 'auto' for the number of files
-      if (moduleIndex == moduleNames.size() - 1 && numJsFiles == -1) {
+      if (moduleIndex == chunkNames.size() - 1 && numJsFiles == -1) {
         numJsFiles = numJsFilesLeft;
       }
 
-      List<SourceFile> moduleFiles = inputs.subList(numJsFilesLeft - numJsFiles, numJsFilesLeft);
-      for (SourceFile input : moduleFiles) {
-        module.add(input);
+      List<CompilerInput> moduleFiles = inputs.subList(numJsFilesLeft - numJsFiles, numJsFilesLeft);
+      for (CompilerInput input : moduleFiles) {
+        chunk.add(input);
       }
       numJsFilesLeft -= numJsFiles;
       moduleIndex++;
     }
 
-    return new ArrayList<>(modulesByName.values());
+    return new ArrayList<>(chunksByName.values());
   }
 
   /**
@@ -921,7 +894,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @param name The module name
    */
-  @GwtIncompatible("Unnecessary")
   protected void checkModuleName(String name) {
     if (!TokenStream.isJSIdentifier(name)) {
       throw new FlagUsageException("Invalid module name: '" + name + "'");
@@ -941,7 +913,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       List<String> specs, Iterable<JSChunk> chunks) {
     checkState(specs != null);
 
-    Map<String, String> wrappers = new HashMap<>();
+    Map<String, String> wrappers = new LinkedHashMap<>();
 
     // Prepopulate the map with module names.
     for (JSChunk c : chunks) {
@@ -998,20 +970,19 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       String filename = spec.substring(pos + 1);
       outputFilesBuilder.put(name, filename);
     }
-    return outputFilesBuilder.build();
+    return outputFilesBuilder.buildOrThrow();
   }
 
   /**
    * Returns the output file name for a chunk.
    *
    * <p>For chunks with predeclared output file names specified using {@code --chunk_output_file},
-   * the the output file name is {@code <outputPathPrefix>/<output_file>}
+   * the output file name is {@code <outputPathPrefix>/<output_file>}
    *
    * <p>Otherwise, the output file name is {@code <outputPathPrefix>/<chunkName>.js}
    */
-  @GwtIncompatible("Unnecessary")
   @VisibleForTesting
-  String getModuleOutputFileName(JSChunk m) {
+  String getChunkOutputFileName(JSChunk m) {
     if (parsedModuleOutputFiles == null) {
       parsedModuleOutputFiles = parseModuleOutputFiles(config.moduleOutputFiles);
     }
@@ -1022,14 +993,22 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return config.moduleOutputPathPrefix + m.getName() + ".js";
   }
 
+  /** Returns the conformance file name for a chunk. */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
-  void writeModuleOutput(String fileName, Appendable out, JSChunk m) throws IOException {
+  String getChunkConformanceFileName(JSChunk m) {
+    if (parsedModuleConformanceFiles == null) {
+      parsedModuleConformanceFiles = parseModuleOutputFiles(config.moduleConformanceFiles);
+    }
+    return parsedModuleConformanceFiles.get(m.getName());
+  }
+
+  @VisibleForTesting
+  void writeModuleOutput(String fileName, Appendable out, LicenseTracker lt, JSChunk m)
+      throws IOException {
     if (parsedModuleWrappers == null) {
       parsedModuleWrappers =
           parseModuleWrappers(
-              config.moduleWrapper,
-              ImmutableList.copyOf(compiler.getModuleGraph().getAllModules()));
+              config.moduleWrapper, ImmutableList.copyOf(compiler.getChunkGraph().getAllChunks()));
     }
 
     if (!isOutputInJson()) {
@@ -1039,6 +1018,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     writeOutput(
         out,
         compiler,
+        lt,
         m,
         parsedModuleWrappers.get(m.getName()).replace("%basename%", baseName),
         "%s",
@@ -1050,13 +1030,13 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Writes code to an output stream, optionally wrapping it in an arbitrary wrapper that contains a
    * placeholder where the code should be inserted.
    *
-   * @param module Which module to write. If this is null, write the entire AST.
+   * @param chunk Which chunk to write. If this is null, write the entire AST.
    */
-  @GwtIncompatible("Unnecessary")
   void writeOutput(
       Appendable out,
       Compiler compiler,
-      @Nullable JSChunk module,
+      LicenseTracker licenseTracker,
+      @Nullable JSChunk chunk,
       String wrapper,
       String codePlaceholder,
       @Nullable Function<String, String> escaper,
@@ -1068,7 +1048,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     }
     checkState(compiler.getOptions().outputJs == OutputJs.NORMAL);
 
-    String code = module == null ? compiler.toSource() : compiler.toSource(module);
+    String code = chunk == null ? compiler.toSource() : compiler.toSource(licenseTracker, chunk);
     writeOutput(out, compiler, code, wrapper, codePlaceholder, escaper, filename);
   }
 
@@ -1076,7 +1056,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Writes code to an output stream, optionally wrapping it in an arbitrary wrapper that contains a
    * placeholder where the code should be inserted.
    */
-  @GwtIncompatible("Unnecessary")
   @VisibleForTesting
   void writeOutput(
       Appendable out,
@@ -1119,20 +1098,15 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Creates any directories necessary to write a file that will have a given path prefix. */
-  @GwtIncompatible("Unnecessary")
   private static void maybeCreateDirsForPath(String pathPrefix) {
     if (!Strings.isNullOrEmpty(pathPrefix)) {
-      String dirName =
-          pathPrefix.charAt(pathPrefix.length() - 1) == File.separatorChar
-              ? pathPrefix.substring(0, pathPrefix.length() - 1)
-              : new File(pathPrefix).getParent();
-      if (dirName != null) {
-        new File(dirName).mkdirs();
+      File parent = new File(pathPrefix).getParentFile();
+      if (parent != null) {
+        parent.mkdirs();
       }
     }
   }
 
-  @GwtIncompatible("Unnecessary")
   private Appendable createDefaultOutput() throws IOException {
     boolean writeOutputToFile = !config.jsOutputFile.isEmpty();
     if (writeOutputToFile) {
@@ -1142,7 +1116,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     }
   }
 
-  @GwtIncompatible("Unnecessary")
   private static void closeAppendable(Appendable output) throws IOException {
     if (output instanceof Flushable) {
       ((Flushable) output).flush();
@@ -1157,7 +1130,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @return system exit status
    */
-  @GwtIncompatible("Unnecessary")
   protected int doRun() throws IOException {
     CompileMetricsRecorderInterface metricsRecorder = getCompileMetricsRecorder();
     metricsRecorder.recordActionStart();
@@ -1174,13 +1146,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     setRunOptions(options);
 
     @Nullable String typedAstListInputFilename = config.typedAstListInputFilename;
-    if (typedAstListInputFilename != null) {
-      initTypedAstFilesystem(typedAstListInputFilename);
-    }
 
     List<SourceFile> externs = createExterns(options);
-    List<JSChunk> modules = null;
-    Result result = null;
+    List<JSChunk> chunks = null;
 
     rootRelativePathsMap = constructRootRelativePathsMap();
 
@@ -1225,25 +1193,26 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
       if (foundJsonInputSourceMap) {
         inputSourceMaps.putAll(options.inputSourceMaps);
-        options.inputSourceMaps = inputSourceMaps.build();
+        options.inputSourceMaps = inputSourceMaps.buildOrThrow();
       }
 
-      compiler.initWebpackMap(inputPathByWebpackId.build());
+      compiler.initWebpackMap(inputPathByWebpackId.buildOrThrow());
     } else {
       ImmutableMap<String, String> emptyMap = ImmutableMap.of();
       compiler.initWebpackMap(emptyMap);
     }
 
     options.setDoLateLocalization(config.shouldDoLateLocalization());
+    options.setAlwaysGatherSourceMapInfo(config.shouldAlwaysGatherSourceMapInfo());
 
     compiler.initOptions(options);
 
-    List<SourceFile> inputs =
+    List<SourceFile> sources =
         createSourceInputs(jsChunkSpecs, config.mixedJsSources, jsonFiles, config.moduleRoots);
 
     if (!jsChunkSpecs.isEmpty()) {
       if (isInTestMode()) {
-        modules = modulesSupplierForTesting.get();
+        chunks = chunksSupplierForTesting.get();
       } else {
         if (JsonStreamMode.IN.equals(config.jsonStreamMode)
             || JsonStreamMode.NONE.equals(config.jsonStreamMode)) {
@@ -1251,54 +1220,83 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
             checkModuleName(m.getName());
           }
         }
-        modules = createJsModules(jsChunkSpecs, inputs);
+        ImmutableList.Builder<CompilerInput> inputs = ImmutableList.builder();
+        for (SourceFile source : sources) {
+          inputs.add(new CompilerInput(source, /* isExtern= */ false));
+        }
+        chunks = createJsChunks(jsChunkSpecs, inputs.build());
       }
-      for (JSChunk m : modules) {
-        outputFileNames.add(getModuleOutputFileName(m));
+      for (JSChunk m : chunks) {
+        outputFileNames.add(getChunkOutputFileName(m));
       }
 
-      compiler.initModules(externs, modules, options);
+      if (typedAstListInputFilename != null) {
+        this.initChunksWithTypedAstFilesystem(externs, chunks, options, typedAstListInputFilename);
+      } else {
+        compiler.initChunks(externs, chunks, options);
+      }
     } else {
-      compiler.init(externs, inputs, options);
+      if (typedAstListInputFilename != null) {
+        this.initWithTypedAstFilesystem(externs, sources, options, typedAstListInputFilename);
+      } else {
+        compiler.init(externs, sources, options);
+      }
     }
 
-    if (options.printConfig) {
-      compiler.printConfig();
-    }
+    // Release temporary data structures now that the compiler has
+    // been initialized
+    jsChunkSpecs = null;
+    jsonFiles = null;
+    externs = null;
+    sources = null;
 
+    Result result;
+    // We won't want to process results for cases where compilation is only partially done.
+    boolean shouldProcessResults = true;
     if (config.skipNormalOutputs) {
       metricsRecorder.recordActionName("skip normal outputs");
-      // TODO(bradfordcsmith): Should we be ignoring possible init/initModules() errors here?
+      // TODO(bradfordcsmith): Should we be ignoring possible init/initChunks() errors here?
       compiler.orderInputsWithLargeStack();
+      result = null;
     } else if (compiler.hasErrors()) {
       metricsRecorder.recordActionName("initialization errors occurred");
-      // init() or initModules() encountered an error.
+      // init() or initChunks() encountered an error.
       compiler.generateReport();
       result = compiler.getResult();
     } else if (options.getInstrumentForCoverageOnly()) {
       result = instrumentForCoverage(metricsRecorder);
     } else if (config.shouldSaveAfterStage1()) {
       result = performStage1andSave(config.getSaveCompilationStateToFilename(), metricsRecorder);
-    } else if (typedAstListInputFilename != null) {
-      result = parseAndPerformStages2and3(metricsRecorder);
+      // Don't output any results, since compilation isn't done yet.
+      shouldProcessResults = false;
+    } else if (config.shouldRestoreTypedAstsPerformStage2AndSave()) {
+      result =
+          restoreTypedAstsPerformStage2AndSave(
+              config.getSaveCompilationStateToFilename(), metricsRecorder);
+      // Don't output any results, since compilation isn't done yet.
+      shouldProcessResults = false;
+    } else if (config.shouldRestoreTypedAstsPerformStages2And3()) {
+      result = restoreTypedAstsPerformStages2and3(metricsRecorder);
     } else if (config.shouldRestoreAndPerformStage2AndSave()) {
       result =
           restoreAndPerformStage2AndSave(
               config.getContinueSavedCompilationFileName(),
               config.getSaveCompilationStateToFilename(),
               metricsRecorder);
+      // Don't output any results, since compilation isn't done yet.
+      shouldProcessResults = false;
     } else if (config.shouldRestoreAndPerformStages2And3()) {
       result =
           restoreAndPerformStages2and3(
               config.getContinueSavedCompilationFileName(), metricsRecorder);
-      if (modules != null) {
-        modules = ImmutableList.copyOf(compiler.getModules());
+      if (chunks != null) {
+        chunks = ImmutableList.copyOf(compiler.getChunks());
       }
     } else if (config.shouldRestoreAndPerformStage3()) {
       result =
           restoreAndPerformStage3(config.getContinueSavedCompilationFileName(), metricsRecorder);
-      if (modules != null) {
-        modules = ImmutableList.copyOf(compiler.getModules());
+      if (chunks != null) {
+        chunks = ImmutableList.copyOf(compiler.getChunks());
       }
     } else {
       result = performFullCompilation(metricsRecorder);
@@ -1306,9 +1304,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     if (createCommonJsModules) {
       // For Commonchunks construct modules from actual inputs.
-      modules = ImmutableList.copyOf(compiler.getModules());
-      for (JSChunk m : modules) {
-        outputFileNames.add(getModuleOutputFileName(m));
+      chunks = ImmutableList.copyOf(compiler.getChunks());
+      for (JSChunk c : chunks) {
+        outputFileNames.add(getChunkOutputFileName(c));
       }
     }
 
@@ -1319,7 +1317,10 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       }
     }
 
-    int exitStatus = processResults(result, modules, options);
+    int exitStatus =
+        shouldProcessResults
+            ? processResults(result, chunks, options)
+            : getExitStatusForResult(result);
     metricsRecorder.recordResultMetrics(compiler, result);
     return exitStatus;
   }
@@ -1332,11 +1333,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return new DummyCompileMetricsRecorder();
   }
 
-  @GwtIncompatible("Unnecessary")
   private Result performStage1andSave(
       String filename, CompileMetricsRecorderInterface metricsRecorder) {
     metricsRecorder.recordActionName("stage 1");
-    Result result;
     try (BufferedOutputStream serializedOutputStream =
         new BufferedOutputStream(new FileOutputStream(filename))) {
       compiler.parseForCompilation();
@@ -1355,25 +1354,61 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       // exception somewhere.
       compiler.generateReport();
     }
-    result = compiler.getResult();
-    return result;
+    return compiler.getResult();
   }
 
-  @GwtIncompatible("Unnecessary")
-  private void initTypedAstFilesystem(String filename) {
-    try (BufferedInputStream typedAstListStream =
-        new BufferedInputStream(new FileInputStream(filename))) {
-      this.typedAstFilesystem = compiler.initTypedAstFilesystem(typedAstListStream);
+  private void initWithTypedAstFilesystem(
+      List<SourceFile> externs,
+      List<SourceFile> sources,
+      CompilerOptions options,
+      String filename) {
+    try (GZIPInputStream typedAstListStream =
+        new GZIPInputStream(new FileInputStream(filename), GZIPPED_TYPEDAST_BUFFER_SIZE)) {
+      compiler.initWithTypedAstFilesystem(externs, sources, options, typedAstListStream);
     } catch (IOException e) {
       compiler.report(JSError.make(COULD_NOT_DESERIALIZE_AST, filename));
     }
   }
 
-  @GwtIncompatible("Unnecessary")
-  private Result parseAndPerformStages2and3(CompileMetricsRecorderInterface metricsRecorder) {
+  private void initChunksWithTypedAstFilesystem(
+      List<SourceFile> externs, List<JSChunk> chunks, CompilerOptions options, String filename) {
+    try (GZIPInputStream typedAstListStream =
+        new GZIPInputStream(new FileInputStream(filename), GZIPPED_TYPEDAST_BUFFER_SIZE)) {
+      compiler.initChunksWithTypedAstFilesystem(externs, chunks, options, typedAstListStream);
+    } catch (IOException e) {
+      compiler.report(JSError.make(COULD_NOT_DESERIALIZE_AST, filename));
+    }
+  }
+
+  private Result restoreTypedAstsPerformStage2AndSave(
+      String outputFilename, CompileMetricsRecorderInterface metricsRecorder) {
+    metricsRecorder.recordActionName("parse & optimize");
+    try {
+      if (!compiler.hasErrors()) {
+        metricsRecorder.recordStartState(compiler);
+        compiler.stage2Passes();
+        if (!compiler.hasErrors()) {
+          try (BufferedOutputStream serializedOutputStream =
+              new BufferedOutputStream(new FileOutputStream(outputFilename))) {
+            compiler.saveState(serializedOutputStream);
+          } catch (IOException e) {
+            compiler.report(JSError.make(COULD_NOT_SERIALIZE_AST, outputFilename));
+          }
+          compiler.performPostCompilationTasks();
+        }
+      }
+    } finally {
+      // Make sure we generate a report of errors and warnings even if the compiler throws an
+      // exception somewhere.
+      compiler.generateReport();
+    }
+    return compiler.getResult();
+  }
+
+  private Result restoreTypedAstsPerformStages2and3(
+      CompileMetricsRecorderInterface metricsRecorder) {
     metricsRecorder.recordActionName("skip-checks compile");
     try {
-      compiler.parseForCompilation();
       if (!compiler.hasErrors()) {
         metricsRecorder.recordStartState(compiler);
         compiler.stage2Passes();
@@ -1390,7 +1425,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return compiler.getResult();
   }
 
-  @GwtIncompatible("Unnecessary")
   private Result restoreAndPerformStage2AndSave(
       String inputFilename,
       String outputFilename,
@@ -1422,7 +1456,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return compiler.getResult();
   }
 
-  @GwtIncompatible("Unnecessary")
   private Result restoreAndPerformStages2and3(
       String filename, CompileMetricsRecorderInterface metricsRecorder) {
     // From the outside this looks like the second stage of a 2-stage compile.
@@ -1448,7 +1481,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return compiler.getResult();
   }
 
-  @GwtIncompatible("Unnecessary")
   private Result restoreAndPerformStage3(
       String filename, CompileMetricsRecorderInterface metricsRecorder) {
     metricsRecorder.recordActionName("stage 3/3");
@@ -1470,13 +1502,11 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return compiler.getResult();
   }
 
-  @GwtIncompatible("Unnecessary")
   private Result performFullCompilation(CompileMetricsRecorderInterface metricsRecorder) {
     // This is the code path taken when "building" a library by just checking it for errors
     // and generating an .ijs file and also when doing a full compilation.
     metricsRecorder.recordActionName(
         compiler.getOptions().checksOnly ? "checks-only" : "full compile");
-    Result result;
     try {
       compiler.parseForCompilation();
       if (!compiler.hasErrors()) {
@@ -1495,14 +1525,11 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       // exception somewhere.
       compiler.generateReport();
     }
-    result = compiler.getResult();
-    return result;
+    return compiler.getResult();
   }
 
-  @GwtIncompatible("Unnecessary")
   private Result instrumentForCoverage(CompileMetricsRecorderInterface metricsRecorder) {
     metricsRecorder.recordActionName("instrument for coverage");
-    Result result;
     try {
       compiler.parseForCompilation();
       if (!compiler.hasErrors()) {
@@ -1512,25 +1539,11 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     } finally {
       compiler.generateReport();
     }
-    result = compiler.getResult();
-    return result;
+    return compiler.getResult();
   }
 
   /** Processes the results of the compile job, and returns an error code. */
-  @GwtIncompatible("Unnecessary")
-  int processResults(Result result, List<JSChunk> modules, B options) throws IOException {
-    if (config.printPassGraph) {
-      if (compiler.getRoot() == null) {
-        return 1;
-      } else {
-        Appendable jsOutput = createDefaultOutput();
-        jsOutput.append(DotFormatter.toDot(compiler.getPassConfig().getPassGraph()));
-        jsOutput.append('\n');
-        closeAppendable(jsOutput);
-        return 0;
-      }
-    }
-
+  int processResults(Result result, List<JSChunk> chunks, B options) throws IOException {
     if (config.printAst) {
       if (compiler.getRoot() == null) {
         return 1;
@@ -1550,8 +1563,20 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
         return 1;
       } else {
         Appendable jsOutput = createDefaultOutput();
-        compiler.getRoot().appendStringTree(jsOutput);
+        compiler.getJsRoot().appendStringTree(jsOutput);
         jsOutput.append("\n");
+        closeAppendable(jsOutput);
+        return 0;
+      }
+    }
+
+    if (config.printTreeJson) {
+      if (compiler.getRoot() == null) {
+        compiler.report(JSError.make(NO_TREE_GENERATED_ERROR));
+        return 1;
+      } else {
+        Appendable jsOutput = createDefaultOutput();
+        compiler.getJsRoot().appendJsonTree(jsOutput);
         closeAppendable(jsOutput);
         return 0;
       }
@@ -1561,11 +1586,11 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       // Output the manifest and bundle files if requested.
       outputManifest();
       outputBundle();
-      outputModuleGraphJson();
+      outputChunkGraphJson();
       return 0;
     } else if (options.outputJs != OutputJs.NONE && result.success) {
-      outputModuleGraphJson();
-      if (modules == null) {
+      outputChunkGraphJson();
+      if (chunks == null) {
         outputSingleBinary(options);
 
         // Output the source map if requested.
@@ -1575,7 +1600,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
           outputSourceMap(options, config.jsOutputFile);
         }
       } else {
-        DiagnosticType error = outputModuleBinaryAndSourceMaps(compiler.getModules(), options);
+        DiagnosticType error = outputModuleBinaryAndSourceMaps(compiler.getChunkGraph(), options);
         if (error != null) {
           compiler.report(JSError.make(error));
           return 1;
@@ -1583,7 +1608,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       }
 
       // Output the externs if required.
-      if (options.externExportsPath != null) {
+      if (options.getExternExportsPath() != null) {
         try (Writer eeOut = openExternExportsStream(options, config.jsOutputFile)) {
           eeOut.append(result.externExport);
         }
@@ -1607,16 +1632,18 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       }
     }
 
+    return getExitStatusForResult(result);
+  }
+
+  private static int getExitStatusForResult(Result result) {
     // return 0 if no errors, the error count otherwise
     return min(result.errors.size(), 0x7f);
   }
 
-  @GwtIncompatible("Unnecessary")
   Function<String, String> getJavascriptEscaper() {
     return SourceCodeEscapers.javascriptEscaper().asFunction();
   }
 
-  @GwtIncompatible("Unnecessary")
   void outputSingleBinary(B options) throws IOException {
     Function<String, String> escaper = null;
     String marker = OUTPUT_MARKER;
@@ -1636,6 +1663,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       writeOutput(
           jsOutput,
           compiler,
+          // So long as the JSChunk arg is null the compiler will write all sources to jsOutput
+          // Use single-binary license tracking to dedupe licenses among all the inputs
+          new SingleBinaryLicenseTracker(compiler),
           (JSChunk) null,
           config.outputWrapper,
           marker,
@@ -1646,13 +1676,15 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Save the compiler output to a JsonFileSpec to be later written to stdout */
-  @GwtIncompatible("Unnecessary")
   JsonFileSpec createJsonFile(B options, String outputMarker, Function<String, String> escaper)
       throws IOException {
     Appendable jsOutput = new StringBuilder();
     writeOutput(
         jsOutput,
         compiler,
+        // So long as the JSChunk arg is null the compiler will write all sources to jsOutput
+        // Use single-binary license tracking to dedupe licenses among all the inputs
+        new SingleBinaryLicenseTracker(compiler),
         (JSChunk) null,
         config.outputWrapper,
         outputMarker,
@@ -1664,7 +1696,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
             jsOutput.toString(),
             Strings.isNullOrEmpty(config.jsOutputFile) ? "compiled.js" : config.jsOutputFile);
 
-    if (!Strings.isNullOrEmpty(options.sourceMapOutputPath)) {
+    if (options.shouldGatherSourceMapInfo()) {
       StringBuilder sourcemap = new StringBuilder();
       compiler.getSourceMap().appendTo(sourcemap, jsonOutput.getPath());
       jsonOutput.setSourceMap(sourcemap.toString());
@@ -1673,7 +1705,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return jsonOutput;
   }
 
-  @GwtIncompatible("Unnecessary")
   void outputJsonStream() throws IOException {
     try (JsonWriter jsonWriter =
         new JsonWriter(new BufferedWriter(new OutputStreamWriter(defaultJsOutput, UTF_8)))) {
@@ -1683,12 +1714,13 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     }
   }
 
-  @GwtIncompatible("Unnecessary")
-  private DiagnosticType outputModuleBinaryAndSourceMaps(Iterable<JSChunk> modules, B options)
-      throws IOException {
+  private @Nullable DiagnosticType outputModuleBinaryAndSourceMaps(
+      JSChunkGraph chunkGraph, B options) throws IOException {
+    Iterable<JSChunk> modules = chunkGraph.getAllChunks();
     parsedModuleWrappers = parseModuleWrappers(config.moduleWrapper, modules);
     if (!isOutputInJson()) {
-      maybeCreateDirsForPath(config.moduleOutputPathPrefix);
+      // make sure the method generates all dirs up to the latest /
+      maybeCreateDirsForPath(config.moduleOutputPathPrefix + "dummy");
     }
 
     // If the source map path is in fact a pattern for each
@@ -1699,15 +1731,16 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     // When the json_streams flag is specified, sourcemaps are always generated
     // per module
     if (!(shouldGenerateMapPerModule(options)
-        || options.sourceMapOutputPath == null
+        || !options.shouldGatherSourceMapInfo()
         || config.jsonStreamMode == JsonStreamMode.OUT
         || config.jsonStreamMode == JsonStreamMode.BOTH)) {
       // warn that this is not supported
       return INVALID_MODULE_SOURCEMAP_PATTERN;
     }
 
+    ChunkGraphAwareLicenseTracker mlicenseTracker = new ChunkGraphAwareLicenseTracker(compiler);
     for (JSChunk m : modules) {
-      if (m.getName().equals(JSChunk.WEAK_MODULE_NAME)) {
+      if (m.getName().equals(JSChunk.WEAK_CHUNK_NAME)) {
         // Skip the weak module, which is always empty.
         continue;
       }
@@ -1718,14 +1751,15 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
           mapFileOut = fileNameToOutputWriter2(expandSourceMapPath(options, m));
         }
 
-        String moduleFilename = getModuleOutputFileName(m);
+        String moduleFilename = getChunkOutputFileName(m);
         maybeCreateDirsForPath(moduleFilename);
         try (Writer writer = fileNameToLegacyOutputWriter(moduleFilename)) {
-          if (options.sourceMapOutputPath != null) {
+          if (options.shouldGatherSourceMapInfo()) {
             compiler.resetAndIntitializeSourceMap();
           }
-          writeModuleOutput(moduleFilename, writer, m);
-          if (options.sourceMapOutputPath != null) {
+          mlicenseTracker.setCurrentChunkContext(m);
+          writeModuleOutput(moduleFilename, writer, mlicenseTracker, m);
+          if (options.shouldGatherSourceMapInfo()) {
             compiler.getSourceMap().appendTo(mapFileOut, moduleFilename);
           }
         }
@@ -1744,19 +1778,18 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Given an output module, convert it to a JSONFileSpec with associated sourcemap */
-  @GwtIncompatible("Unnecessary")
-  private JsonFileSpec createJsonFileFromModule(JSChunk module) throws IOException {
+  private JsonFileSpec createJsonFileFromModule(JSChunk chunk) throws IOException {
     compiler.resetAndIntitializeSourceMap();
 
-    String filename = getModuleOutputFileName(module);
+    String filename = getChunkOutputFileName(chunk);
     StringBuilder output = new StringBuilder();
-    writeModuleOutput(filename, output, module);
+    writeModuleOutput(filename, output, new ScriptNodeLicensesOnlyTracker(compiler), chunk);
 
     JsonFileSpec jsonFile = new JsonFileSpec(output.toString(), filename);
 
     StringBuilder moduleSourceMap = new StringBuilder();
 
-    compiler.getSourceMap().appendTo(moduleSourceMap, getModuleOutputFileName(module));
+    compiler.getSourceMap().appendTo(moduleSourceMap, getChunkOutputFileName(chunk));
 
     jsonFile.setSourceMap(moduleSourceMap.toString());
 
@@ -1769,7 +1802,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @return Charset to use when reading inputs
    * @throws FlagUsageException if flag is not a valid Charset name.
    */
-  @GwtIncompatible("Unnecessary")
   private Charset getInputCharset() {
     if (!config.charset.isEmpty()) {
       if (!Charset.isSupported(config.charset)) {
@@ -1790,7 +1822,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @return Name of the charset to use when writing outputs. Guaranteed to be a supported charset.
    * @throws FlagUsageException if flag is not a valid Charset name.
    */
-  @GwtIncompatible("Unnecessary")
   private Charset getLegacyOutputCharset() {
     if (!config.charset.isEmpty()) {
       if (!Charset.isSupported(config.charset)) {
@@ -1806,7 +1837,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @throws FlagUsageException if flag is not a valid Charset name.
    */
-  @GwtIncompatible("Unnecessary")
   private Charset getOutputCharset2() {
     if (!config.charset.isEmpty()) {
       if (!Charset.isSupported(config.charset)) {
@@ -1817,7 +1847,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     return UTF_8;
   }
 
-  @GwtIncompatible("Unnecessary")
   protected List<SourceFile> createExterns(CompilerOptions options) throws IOException {
     return isInTestMode() ? externsSupplierForTesting.get() : createExternInputs(config.externs);
   }
@@ -1827,9 +1856,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * to one unified map. This is specified by having the source map pattern include the %outname%
    * variable.
    */
-  @GwtIncompatible("Unnecessary")
   protected boolean shouldGenerateMapPerModule(B options) {
-    return options.sourceMapOutputPath != null && options.sourceMapOutputPath.contains("%outname%");
+    return options.shouldGatherSourceMapInfo()
+        && options.getSourceMapOutputPath().contains("%outname%");
   }
 
   /**
@@ -1839,13 +1868,13 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * @param path The path of the generated JS source file.
    * @return The stream or null if no extern-ed exports are being generated.
    */
-  @GwtIncompatible("Unnecessary")
-  private Writer openExternExportsStream(B options, String path) throws IOException {
-    if (options.externExportsPath == null) {
+  private @Nullable Writer openExternExportsStream(B options, String path) throws IOException {
+    final String externExportsPath = options.getExternExportsPath();
+    if (externExportsPath == null) {
       return null;
     }
 
-    String exPath = options.externExportsPath;
+    String exPath = externExportsPath;
 
     if (!exPath.contains(File.separator)) {
       File outputFile = new File(path);
@@ -1868,11 +1897,10 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * <p>Passing a JSChunk to this function automatically triggers case #3. Otherwise, we'll use
    * strategy #1 or #2 based on the current output mode.
    */
-  @GwtIncompatible("Unnecessary")
-  private String expandCommandLinePath(String path, JSChunk forModule) {
+  private String expandCommandLinePath(String path, @Nullable JSChunk forChunk) {
     String sub;
-    if (forModule != null) {
-      sub = getModuleOutputFileName(forModule);
+    if (forChunk != null) {
+      sub = getChunkOutputFileName(forChunk);
     } else if (!config.module.isEmpty()) {
       sub = config.moduleOutputPathPrefix;
     } else {
@@ -1883,20 +1911,18 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
   /** Expansion function for source map. */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
-  String expandSourceMapPath(B options, JSChunk forModule) {
-    if (Strings.isNullOrEmpty(options.sourceMapOutputPath)) {
+  @Nullable String expandSourceMapPath(B options, @Nullable JSChunk forChunk) {
+    if (!options.shouldGatherSourceMapInfo()) {
       return null;
     }
-    return expandCommandLinePath(options.sourceMapOutputPath, forModule);
+    return expandCommandLinePath(options.getSourceMapOutputPath(), forChunk);
   }
 
   /**
    * Converts a file name into a Writer taking in account the output charset. Returns null if the
    * file name is null.
    */
-  @GwtIncompatible("Unnecessary")
-  private Writer fileNameToLegacyOutputWriter(String fileName) throws IOException {
+  private @Nullable Writer fileNameToLegacyOutputWriter(String fileName) throws IOException {
     if (fileName == null) {
       return null;
     }
@@ -1911,8 +1937,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Converts a file name into a Writer taking in account the output charset. Returns null if the
    * file name is null.
    */
-  @GwtIncompatible("Unnecessary")
-  private Writer fileNameToOutputWriter2(String fileName) throws IOException {
+  private @Nullable Writer fileNameToOutputWriter2(String fileName) throws IOException {
     if (fileName == null) {
       return null;
     }
@@ -1924,8 +1949,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Converts a file name into a Outputstream. Returns null if the file name is null. */
-  @GwtIncompatible("Unnecessary")
-  protected OutputStream filenameToOutputStream(String fileName) throws IOException {
+  protected @Nullable OutputStream filenameToOutputStream(String fileName) throws IOException {
     if (fileName == null) {
       return null;
     }
@@ -1933,23 +1957,26 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Create a writer with the legacy output charset. */
-  @GwtIncompatible("Unnecessary")
-  private Writer streamToLegacyOutputWriter(OutputStream stream) throws IOException {
+  private Writer streamToLegacyOutputWriter(OutputStream stream) {
     if (legacyOutputCharset == null) {
-      return new BufferedWriter(new OutputStreamWriter(stream, UTF_8));
+      return createWriter(stream, UTF_8);
     } else {
-      return new BufferedWriter(new OutputStreamWriter(stream, legacyOutputCharset));
+      return createWriter(stream, legacyOutputCharset);
     }
   }
 
   /** Create a writer with the newer output charset. */
-  @GwtIncompatible("Unnecessary")
   private Writer streamToOutputWriter2(OutputStream stream) {
     if (outputCharset2 == null) {
-      return new BufferedWriter(new OutputStreamWriter(stream, UTF_8));
+      return createWriter(stream, UTF_8);
     } else {
-      return new BufferedWriter(new OutputStreamWriter(stream, outputCharset2));
+      return createWriter(stream, outputCharset2);
     }
+  }
+
+  /** Creates a buffered Writer that writes to the given stream using the given encoding. */
+  Writer createWriter(OutputStream stream, Charset charset) {
+    return new BufferedWriter(new OutputStreamWriter(stream, charset));
   }
 
   /**
@@ -1957,10 +1984,9 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @param options The options to the Compiler.
    */
-  @GwtIncompatible("Unnecessary")
   private void outputSourceMap(B options, String associatedName) throws IOException {
-    if (Strings.isNullOrEmpty(options.sourceMapOutputPath)
-        || options.sourceMapOutputPath.equals("/dev/null")) {
+    if (!options.shouldGatherSourceMapInfo()
+        || options.getSourceMapOutputPath().equals("/dev/null")) {
       return;
     }
 
@@ -1977,7 +2003,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    *
    * @return The path in which to place the generated map file(s).
    */
-  @GwtIncompatible("Unnecessary")
   private String getMapPath(String outputFile) {
     String basePath = "";
 
@@ -2015,7 +2040,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Outputs the variable and property name maps for the specified compiler if the proper FLAGS are
    * set.
    */
-  @GwtIncompatible("Unnecessary")
   private void outputNameMaps() throws IOException {
 
     String propertyMapOutputPath = null;
@@ -2063,7 +2087,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   /**
    * Outputs the string map generated by the {@link ReplaceStrings} pass if an output path exists.
    */
-  @GwtIncompatible("Unnecessary")
   private void outputStringMap() throws IOException {
     if (!config.stringMapOutputPath.isEmpty()) {
       if (compiler.getStringMap() == null) {
@@ -2135,25 +2158,22 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Returns true if and only if a manifest or bundle should be generated for each module, as
    * opposed to one unified manifest.
    */
-  @GwtIncompatible("Unnecessary")
   private boolean shouldGenerateOutputPerModule(String output) {
     return !config.module.isEmpty() && output != null && output.contains("%outname%");
   }
 
-  @GwtIncompatible("Unnecessary")
   private void outputManifest() throws IOException {
     outputManifestOrBundle(config.outputManifests, true);
   }
 
-  @GwtIncompatible("Unnecessary")
   private void outputBundle() throws IOException {
     outputManifestOrBundle(config.outputBundles, false);
   }
 
-  @GwtIncompatible("Unnecessary")
   private void outputInstrumentationMapping() throws IOException {
     if (!Strings.isNullOrEmpty(config.instrumentationMappingFile)) {
-      compiler.getInstrumentationMapping().save(config.instrumentationMappingFile);
+      String path = expandCommandLinePath(config.instrumentationMappingFile, /* forChunk= */ null);
+      compiler.getInstrumentationMapping().save(path);
     }
   }
 
@@ -2161,7 +2181,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Writes the manifest or bundle of all compiler input files that were included as controlled by
    * --dependency_mode, if requested.
    */
-  @GwtIncompatible("Unnecessary")
   private void outputManifestOrBundle(List<String> outputFiles, boolean isManifest)
       throws IOException {
     if (outputFiles.isEmpty()) {
@@ -2175,13 +2194,13 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
       if (shouldGenerateOutputPerModule(output)) {
         // Generate per-module manifests or bundles.
-        Iterable<JSChunk> modules = compiler.getModuleGraph().getAllModules();
-        for (JSChunk module : modules) {
-          try (Writer out = fileNameToOutputWriter2(expandCommandLinePath(output, module))) {
+        Iterable<JSChunk> chunks = compiler.getChunkGraph().getAllChunks();
+        for (JSChunk chunk : chunks) {
+          try (Writer out = fileNameToOutputWriter2(expandCommandLinePath(output, chunk))) {
             if (isManifest) {
-              printManifestTo(module, out);
+              printManifestTo(chunk, out);
             } else {
-              printBundleTo(module, out);
+              printBundleTo(chunk, out);
             }
           }
         }
@@ -2191,15 +2210,15 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
           if (config.module.isEmpty()) {
             // For a single-module compilation, generate a single headerless manifest or bundle
             // containing only the strong files.
-            JSChunk module = compiler.getModuleGraph().getModuleByName(JSChunk.STRONG_MODULE_NAME);
+            JSChunk chunk = compiler.getChunkGraph().getChunkByName(JSChunk.STRONG_CHUNK_NAME);
             if (isManifest) {
-              printManifestTo(module, out);
+              printManifestTo(chunk, out);
             } else {
-              printBundleTo(module, out);
+              printBundleTo(chunk, out);
             }
           } else {
             // For a multi-module compilation, generate a single manifest file with module headers.
-            printModuleGraphManifestOrBundleTo(compiler.getModuleGraph(), out, isManifest);
+            printChunkGraphManifestOrBundleTo(compiler.getChunkGraph(), out, isManifest);
           }
         }
       }
@@ -2207,31 +2226,28 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Creates a file containing the current module graph in JSON serialization. */
-  @GwtIncompatible("Unnecessary")
-  private void outputModuleGraphJson() throws IOException {
+  private void outputChunkGraphJson() throws IOException {
     if (config.outputModuleDependencies != null && config.outputModuleDependencies.length() != 0) {
       try (Writer out = fileNameToOutputWriter2(config.outputModuleDependencies)) {
-        printModuleGraphJsonTo(out);
+        printChunkGraphJsonTo(out);
       }
     }
   }
 
   /** Prints the current module graph as JSON. */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
-  void printModuleGraphJsonTo(Appendable out) throws IOException {
-    out.append(compiler.getModuleGraph().toJson().toString());
+  void printChunkGraphJsonTo(Appendable out) throws IOException {
+    out.append(compiler.getChunkGraph().toJson().toString());
   }
 
   /** Prints a set of modules to the manifest or bundle file. */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
-  void printModuleGraphManifestOrBundleTo(JSChunkGraph graph, Appendable out, boolean isManifest)
+  void printChunkGraphManifestOrBundleTo(JSChunkGraph graph, Appendable out, boolean isManifest)
       throws IOException {
     Joiner commas = Joiner.on(",");
     boolean requiresNewline = false;
-    for (JSChunk module : graph.getAllModules()) {
-      if (!isManifest && module.isWeak()) {
+    for (JSChunk chunk : graph.getAllChunks()) {
+      if (!isManifest && chunk.isWeak()) {
         // Skip the weak module on a multi-module bundle, but not a multi-module manifest.
         continue;
       }
@@ -2243,13 +2259,13 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       if (isManifest) {
         // See CommandLineRunnerTest to see what the format of this
         // manifest looks like.
-        String dependencies = commas.join(module.getSortedDependencyNames());
+        String dependencies = commas.join(chunk.getSortedDependencyNames());
         out.append(
             String.format(
-                "{%s%s}\n", module.getName(), dependencies.isEmpty() ? "" : ":" + dependencies));
-        printManifestTo(module, out);
+                "{%s%s}\n", chunk.getName(), dependencies.isEmpty() ? "" : ":" + dependencies));
+        printManifestTo(chunk, out);
       } else {
-        printBundleTo(module, out);
+        printBundleTo(chunk, out);
       }
       requiresNewline = true;
     }
@@ -2260,9 +2276,8 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * manifest file.
    */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
-  void printManifestTo(JSChunk module, Appendable out) throws IOException {
-    for (CompilerInput input : module.getInputs()) {
+  void printManifestTo(JSChunk chunk, Appendable out) throws IOException {
+    for (CompilerInput input : chunk.getInputs()) {
       String name = input.getName();
 
       // Ignore fill files created by the compiler to facilitate cross-module code motion.
@@ -2282,9 +2297,8 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * (using root-relative paths) before each file.
    */
   @VisibleForTesting
-  @GwtIncompatible("Unnecessary")
-  void printBundleTo(JSChunk module, Appendable out) throws IOException {
-    Iterable<CompilerInput> inputs = module.getInputs();
+  void printBundleTo(JSChunk chunk, Appendable out) throws IOException {
+    ImmutableList<CompilerInput> inputs = chunk.getInputs();
     // Prebuild ASTs before they're needed in getLoadFlags, for performance and because
     // StackOverflowErrors can be hit if not prebuilt.
     if (compiler.getOptions().numParallelThreads > 1) {
@@ -2294,7 +2308,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       // ES6 modules will need a runtime in a bundle. Skip appending this runtime if there are no
       // ES6 modules to cut down on size.
       for (CompilerInput input : inputs) {
-        if ("es6".equals(input.getLoadFlags().get("module"))) {
+        if (input.isEs6Module()) {
           appendRuntimeTo(out);
           break;
         }
@@ -2329,7 +2343,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * Construct and return the input root path map. The key is the exec path of each input file, and
    * the value is the corresponding root relative path.
    */
-  @GwtIncompatible("Unnecessary")
   private Map<String, String> constructRootRelativePathsMap() {
     Map<String, String> rootRelativePathsMap = new LinkedHashMap<>();
     for (String mapString : config.manifestMaps) {
@@ -2352,43 +2365,46 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
    * the CompilerOptions directly, but that conflicts with the latter's mutability and the desire to
    * reuse the same options across multiple compilations.
    */
-  @GwtIncompatible("Unnecessary")
   protected static class CommandLineConfig {
 
     private boolean printVersion;
 
+    @CanIgnoreReturnValue
     CommandLineConfig setPrintVersion(boolean x) {
       this.printVersion = x;
       return this;
     }
 
     private boolean printTree = false;
+    private boolean printTreeJson = false;
 
     /** Prints out the parse tree and exits */
+    @CanIgnoreReturnValue
     CommandLineConfig setPrintTree(boolean printTree) {
       this.printTree = printTree;
+      return this;
+    }
+
+    /** Prints out the parse tree and exits */
+    @CanIgnoreReturnValue
+    CommandLineConfig setPrintTreeJson(boolean printTreeJson) {
+      this.printTreeJson = printTreeJson;
       return this;
     }
 
     private boolean printAst = false;
 
     /** Prints a dot file describing the internal abstract syntax tree and exits */
+    @CanIgnoreReturnValue
     public CommandLineConfig setPrintAst(boolean printAst) {
       this.printAst = printAst;
-      return this;
-    }
-
-    private boolean printPassGraph = false;
-
-    /** Prints a dot file describing the passes that will get run and exits */
-    public CommandLineConfig setPrintPassGraph(boolean printPassGraph) {
-      this.printPassGraph = printPassGraph;
       return this;
     }
 
     private CompilerOptions.DevMode jscompDevMode = CompilerOptions.DevMode.OFF;
 
     /** Turns on extra validity checks */
+    @CanIgnoreReturnValue
     public CommandLineConfig setJscompDevMode(CompilerOptions.DevMode jscompDevMode) {
       this.jscompDevMode = jscompDevMode;
       return this;
@@ -2400,6 +2416,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * The logging level (standard java.util.logging.Level values) for Compiler progress. Does not
      * control errors or warnings for the JavaScript code under compilation
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setLoggingLevel(String loggingLevel) {
       this.loggingLevel = loggingLevel;
       return this;
@@ -2408,6 +2425,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private final List<String> externs = new ArrayList<>();
 
     /** The file containing JavaScript externs. You may specify multiple. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setExterns(List<String> externs) {
       this.externs.clear();
       this.externs.addAll(externs);
@@ -2417,6 +2435,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private final List<FlagEntry<JsSourceType>> mixedJsSources = new ArrayList<>();
 
     /** The JavaScript source file names, including .js and .zip files. You may specify multiple. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setMixedJsSources(List<FlagEntry<JsSourceType>> mixedJsSources) {
       this.mixedJsSources.clear();
       this.mixedJsSources.addAll(mixedJsSources);
@@ -2429,6 +2448,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * Whether to read a single source file from standard input if no input files are explicitly
      * specified.
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setDefaultToStdin() {
       this.defaultToStdin = true;
       return this;
@@ -2437,6 +2457,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private String jsOutputFile = "";
 
     /** Primary output filename. If not specified, output is written to stdout */
+    @CanIgnoreReturnValue
     public CommandLineConfig setJsOutputFile(String jsOutputFile) {
       this.jsOutputFile = jsOutputFile;
       return this;
@@ -2446,7 +2467,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * When non-null specifies a file containing saved compiler state to restore and continue
      * compiling.
      */
-    private String continueSavedCompilationFileName = null;
+    private @Nullable String continueSavedCompilationFileName = null;
 
     /**
      * When > 0 indicates the stage at which compilation stopped for the compilation state that is
@@ -2461,6 +2482,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private int saveAfterCompilationStage = -1;
 
     /** Set the compiler to resume a saved compilation state from a file. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setContinueSavedCompilationFileName(
         String fileName, int restoredCompilationStage) {
       if (fileName != null) {
@@ -2514,6 +2536,20 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       }
     }
 
+    boolean shouldRestoreTypedAstsPerformStage2AndSave() {
+      // We have a typed ast input list to parse
+      return typedAstListInputFilename != null
+          // we want to stop and save after optimizations
+          && saveAfterCompilationStage == 2;
+    }
+
+    boolean shouldRestoreTypedAstsPerformStages2And3() {
+      // We have a typed ast input list to parse
+      return typedAstListInputFilename != null
+          // we do not want to stop and save after optimizations
+          && saveAfterCompilationStage == -1;
+    }
+
     boolean shouldRestoreAndPerformStage2AndSave() {
       // We have a saved compilations state to restore
       return shouldContinueCompilation()
@@ -2537,24 +2573,37 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     }
 
     boolean shouldDoLateLocalization() {
-      // The point of doing a 3-stage compilation is to save localization work for last, so
-      // we avoid doing checks and optimizations separately for every locale.
-      // If we aren't doing a 3-stage compilation, then late localization is just doing more work
-      // for a possibly-bigger compiled output (because code gets added after optimizations have
-      // already executed).
-      return shouldRestoreAndPerformStage2AndSave() || shouldRestoreAndPerformStage3();
+      // The point of dividing checks, optimizations, and finalizations into different stages is to
+      // localization work for last, so we avoid doing checks and optimizations separately for every
+      // locale.
+      // If we aren't doing finalizations as a separate final stage, then late localization is just
+      // doing more work for a possibly-bigger compiled output (because code gets added after
+      // optimizations have already executed).
+      return shouldRestoreAndPerformStage2AndSave()
+          || shouldRestoreAndPerformStage3()
+          || shouldRestoreTypedAstsPerformStage2AndSave();
     }
 
-    @Nullable private String typedAstListInputFilename;
+    boolean shouldAlwaysGatherSourceMapInfo() {
+      // If we're doing a partial compilation that isn't the final stage, we need to always gather
+      // source map info in case the final stage requires it.
+      return shouldSaveAfterStage1()
+          || shouldRestoreAndPerformStage2AndSave()
+          || shouldRestoreTypedAstsPerformStage2AndSave();
+    }
 
+    private @Nullable String typedAstListInputFilename;
+
+    @CanIgnoreReturnValue
     public CommandLineConfig setTypedAstListInputFilename(@Nullable String fileName) {
       this.typedAstListInputFilename = fileName;
       return this;
     }
 
-    private String saveCompilationStateToFilename = null;
+    private @Nullable String saveCompilationStateToFilename = null;
 
     /** Set the compiler to perform the first phase and save the intermediate result to a file. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setSaveCompilationStateToFilename(
         String fileName, int saveAfterCompilationStage) {
       saveCompilationStateToFilename = fileName;
@@ -2575,14 +2624,16 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * source files must be listed in the corresponding order. Where --module flags occur in
      * relation to --js flags is unimportant
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setModule(List<String> module) {
       this.module.clear();
       this.module.addAll(module);
       return this;
     }
 
-    private Map<String, String> sourceMapInputFiles = new HashMap<>();
+    private Map<String, String> sourceMapInputFiles = new LinkedHashMap<>();
 
+    @CanIgnoreReturnValue
     public CommandLineConfig setSourceMapInputFiles(Map<String, String> sourceMapInputFiles) {
       this.sourceMapInputFiles = sourceMapInputFiles;
       return this;
@@ -2590,6 +2641,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     private boolean parseInlineSourceMaps = false;
 
+    @CanIgnoreReturnValue
     public CommandLineConfig setParseInlineSourceMaps(boolean parseInlineSourceMaps) {
       this.parseInlineSourceMaps = parseInlineSourceMaps;
       return this;
@@ -2601,6 +2653,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * File containing the serialized version of the variable renaming map produced by a previous
      * compilation
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setVariableMapInputFile(String variableMapInputFile) {
       this.variableMapInputFile = variableMapInputFile;
       return this;
@@ -2612,6 +2665,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * File containing the serialized version of the property renaming map produced by a previous
      * compilation
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setPropertyMapInputFile(String propertyMapInputFile) {
       this.propertyMapInputFile = propertyMapInputFile;
       return this;
@@ -2620,6 +2674,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private String variableMapOutputFile = "";
 
     /** File where the serialized version of the variable renaming map produced should be saved */
+    @CanIgnoreReturnValue
     public CommandLineConfig setVariableMapOutputFile(String variableMapOutputFile) {
       this.variableMapOutputFile = variableMapOutputFile;
       return this;
@@ -2632,6 +2687,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * name}_vars_map.out and {binary name}_props_map.out. Note that this flag cannot be used in
      * conjunction with either variable_map_output_file or property_map_output_file
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setCreateNameMapFiles(boolean createNameMapFiles) {
       this.createNameMapFiles = createNameMapFiles;
       return this;
@@ -2640,6 +2696,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private String propertyMapOutputFile = "";
 
     /** File where the serialized version of the property renaming map produced should be saved */
+    @CanIgnoreReturnValue
     public CommandLineConfig setPropertyMapOutputFile(String propertyMapOutputFile) {
       this.propertyMapOutputFile = propertyMapOutputFile;
       return this;
@@ -2651,6 +2708,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * File where the serialized version of the string map produced by the ReplaceStrings pass
      * should be saved.
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setStringMapOutputFile(String stringMapOutputPath) {
       this.stringMapOutputPath = stringMapOutputPath;
       return this;
@@ -2658,6 +2716,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     private String instrumentationMappingFile = "";
 
+    @CanIgnoreReturnValue
     public CommandLineConfig setInstrumentationMappingFile(String instrumentationMappingFile) {
       this.instrumentationMappingFile = instrumentationMappingFile;
       return this;
@@ -2666,6 +2725,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private CodingConvention codingConvention = CodingConventions.getDefault();
 
     /** Sets rules and conventions to enforce. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setCodingConvention(CodingConvention codingConvention) {
       this.codingConvention = codingConvention;
       return this;
@@ -2675,9 +2735,10 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     /**
      * Controls how detailed the compilation summary is. Values: 0 (never print summary), 1 (print
-     * summary only if there are errors or warnings), 2 (print summary if type checking is on, see
-     * --check_types), 3 (always print summary). The default level is 1
+     * summary only if there are errors or warnings), 2 (print summary if type checking is on), 3
+     * (always print summary). The default level is 1
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setSummaryDetailLevel(int summaryDetailLevel) {
       this.summaryDetailLevel = summaryDetailLevel;
       return this;
@@ -2689,6 +2750,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * Interpolate output into this string at the place denoted by the marker token %output%, or
      * %output|jsstring%
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setOutputWrapper(String outputWrapper) {
       this.outputWrapper = outputWrapper;
       return this;
@@ -2700,6 +2762,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * An output wrapper for a JavaScript module (optional). See the flag description for formatting
      * requirements.
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setModuleWrapper(List<String> moduleWrapper) {
       this.moduleWrapper.clear();
       this.moduleWrapper.addAll(moduleWrapper);
@@ -2712,6 +2775,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * Prefix for filenames of compiled chunks. {@code <module-name>.js} will be appended to this
      * prefix. Directories will be created as needed. Use with --module
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setModuleOutputPathPrefix(String moduleOutputPathPrefix) {
       this.moduleOutputPathPrefix = moduleOutputPathPrefix;
       return this;
@@ -2723,9 +2787,23 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * The output file name for a JavaScript chunk (optional). See the flag description for
      * formatting requirements.
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setModuleOutputFiles(List<String> moduleOutputFiles) {
       this.moduleOutputFiles.clear();
       this.moduleOutputFiles.addAll(moduleOutputFiles);
+      return this;
+    }
+
+    private final List<String> moduleConformanceFiles = new ArrayList<>();
+
+    /**
+     * The conformance report file name for a JavaScript chunk (optional). See the flag description
+     * for formatting requirements.
+     */
+    @CanIgnoreReturnValue
+    public CommandLineConfig setModuleConformanceFiles(List<String> moduleConformanceFiles) {
+      this.moduleConformanceFiles.clear();
+      this.moduleConformanceFiles.addAll(moduleConformanceFiles);
       return this;
     }
 
@@ -2736,6 +2814,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * source file will be output to the specified path. The %outname% placeholder will expand to
      * the name of the output file that the source map corresponds to.
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setCreateSourceMap(String createSourceMap) {
       this.createSourceMap = createSourceMap;
       return this;
@@ -2744,6 +2823,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private SourceMap.DetailLevel sourceMapDetailLevel = SourceMap.DetailLevel.ALL;
 
     /** The detail supplied in the source map file, if generated. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setSourceMapDetailLevel(SourceMap.DetailLevel level) {
       this.sourceMapDetailLevel = level;
       return this;
@@ -2752,6 +2832,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private SourceMap.Format sourceMapFormat = SourceMap.Format.DEFAULT;
 
     /** The source map format to use, if generated. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setSourceMapFormat(SourceMap.Format format) {
       this.sourceMapFormat = format;
       return this;
@@ -2760,6 +2841,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private ImmutableList<SourceMap.LocationMapping> sourceMapLocationMappings = ImmutableList.of();
 
     /** The source map location mappings to use, if generated. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setSourceMapLocationMappings(
         List<SourceMap.LocationMapping> locationMappings) {
 
@@ -2773,6 +2855,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * Whether to apply input source maps to the output, i.e. map back to original inputs from input
      * files that have source maps applied to them.
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setApplyInputSourceMaps(boolean applyInputSourceMaps) {
       this.applyInputSourceMaps = applyInputSourceMaps;
       return this;
@@ -2781,6 +2864,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private final ArrayList<FlagEntry<CheckLevel>> warningGuards = new ArrayList<>();
 
     /** Add warning guards. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setWarningGuards(List<FlagEntry<CheckLevel>> warningGuards) {
       this.warningGuards.clear();
       this.warningGuards.addAll(warningGuards);
@@ -2795,15 +2879,17 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
      * number, or a single-quoted string that contains no single quotes. If {@code [=<val>]} is
      * omitted, the variable is marked true
      */
+    @CanIgnoreReturnValue
     public CommandLineConfig setDefine(List<String> define) {
       this.define.clear();
       this.define.addAll(define);
       return this;
     }
 
-    private Integer browserFeaturesetYear = 0;
+    private int browserFeaturesetYear = 0;
 
     /** Indicates target browser's year */
+    @CanIgnoreReturnValue
     public CommandLineConfig setBrowserFeaturesetYear(Integer browserFeaturesetYear) {
       this.browserFeaturesetYear = browserFeaturesetYear;
       return this;
@@ -2812,6 +2898,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private TweakProcessing tweakProcessing = TweakProcessing.OFF;
 
     /** Sets the kind of processing to do for goog.tweak functions. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setTweakProcessing(TweakProcessing tweakProcessing) {
       this.tweakProcessing = tweakProcessing;
       return this;
@@ -2820,14 +2907,16 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private String charset = "";
 
     /** Input charset for all files. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setCharset(String charset) {
       this.charset = charset;
       return this;
     }
 
-    private DependencyOptions dependencyOptions = null;
+    private @Nullable DependencyOptions dependencyOptions = null;
 
     /** Sets the dependency management options. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setDependencyOptions(@Nullable DependencyOptions dependencyOptions) {
       this.dependencyOptions = dependencyOptions;
       return this;
@@ -2836,6 +2925,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private List<String> outputManifests = ImmutableList.of();
 
     /** Sets whether to print output manifest files. Filter out empty file names. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setOutputManifest(List<String> outputManifests) {
       this.outputManifests = new ArrayList<>();
       for (String manifestName : outputManifests) {
@@ -2847,9 +2937,10 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       return this;
     }
 
-    private String outputModuleDependencies = null;
+    private @Nullable String outputModuleDependencies = null;
 
     /** Sets whether a JSON file representing the dependencies between modules should be created. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setOutputModuleDependencies(String outputModuleDependencies) {
       this.outputModuleDependencies = outputModuleDependencies;
       return this;
@@ -2858,6 +2949,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private List<String> outputBundles = ImmutableList.of();
 
     /** Sets whether to print output bundle files. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setOutputBundle(List<String> outputBundles) {
       this.outputBundles = outputBundles;
       return this;
@@ -2866,6 +2958,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private boolean skipNormalOutputs = false;
 
     /** Sets whether the normal outputs of compilation should be skipped. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setSkipNormalOutputs(boolean skipNormalOutputs) {
       this.skipNormalOutputs = skipNormalOutputs;
       return this;
@@ -2874,22 +2967,16 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private List<String> manifestMaps = ImmutableList.of();
 
     /** Sets the execPath:rootRelativePath mappings */
+    @CanIgnoreReturnValue
     public CommandLineConfig setManifestMaps(List<String> manifestMaps) {
       this.manifestMaps = manifestMaps;
-      return this;
-    }
-
-    private boolean transformAMDToCJSModules = false;
-
-    /** Set whether to transform AMD to Commonchunks. */
-    public CommandLineConfig setTransformAMDToCJSModules(boolean transformAMDToCJSModules) {
-      this.transformAMDToCJSModules = transformAMDToCJSModules;
       return this;
     }
 
     private boolean processCommonJSModules = false;
 
     /** Sets whether to process Commonchunks. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setProcessCommonJSModules(boolean processCommonJSModules) {
       this.processCommonJSModules = processCommonJSModules;
       return this;
@@ -2898,6 +2985,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private List<String> moduleRoots = ImmutableList.of(ModuleLoader.DEFAULT_FILENAME_PREFIX);
 
     /** Sets the module roots. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setModuleRoots(List<String> jsChunkRoots) {
       this.moduleRoots = jsChunkRoots;
       return this;
@@ -2906,6 +2994,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private String warningsAllowFile = "";
 
     /** Sets a allowlist file that suppresses warnings. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setWarningsAllowlistFile(String fileName) {
       this.warningsAllowFile = fileName;
       return this;
@@ -2914,6 +3003,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private List<String> hideWarningsFor = ImmutableList.of();
 
     /** Sets the paths for which warnings will be hidden. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setHideWarningsFor(List<String> hideWarningsFor) {
       this.hideWarningsFor = hideWarningsFor;
       return this;
@@ -2922,6 +3012,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     private boolean angularPass = false;
 
     /** Sets whether to process AngularJS-specific annotations. */
+    @CanIgnoreReturnValue
     public CommandLineConfig setAngularPass(boolean angularPass) {
       this.angularPass = angularPass;
       return this;
@@ -2929,6 +3020,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     private JsonStreamMode jsonStreamMode = JsonStreamMode.NONE;
 
+    @CanIgnoreReturnValue
     public CommandLineConfig setJsonStreamMode(JsonStreamMode mode) {
       this.jsonStreamMode = mode;
       return this;
@@ -2942,6 +3034,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     private ErrorFormatOption errorFormat = ErrorFormatOption.STANDARD;
 
+    @CanIgnoreReturnValue
     public CommandLineConfig setErrorFormat(ErrorFormatOption errorFormat) {
       this.errorFormat = errorFormat;
       return this;
@@ -2949,6 +3042,7 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
 
     private String jsonWarningsFile = "";
 
+    @CanIgnoreReturnValue
     public CommandLineConfig setJsonWarningsFile(String jsonWarningsFile) {
       this.jsonWarningsFile = jsonWarningsFile;
       return this;
@@ -2956,22 +3050,19 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Representation of a source file from an encoded json stream input */
-  @GwtIncompatible("Unnecessary")
   public static class JsonFileSpec {
-    @Nullable private final String src;
-    @Nullable private final String path;
+    private final @Nullable String src;
+    private final @Nullable String path;
 
-    @Nullable
     @SerializedName(
         value = "source_map",
         alternate = {"sourceMap"})
-    private String sourceMap;
+    private @Nullable String sourceMap;
 
-    @Nullable
     @SerializedName(
         value = "webpack_id",
         alternate = {"webpackId"})
-    private final String webpackId;
+    private final @Nullable String webpackId;
 
     // Graal requires a non-arg constructor for use with GSON
     // See https://github.com/oracle/graal/issues/680
@@ -2987,7 +3078,11 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
       this(src, path, sourceMap, null);
     }
 
-    public JsonFileSpec(String src, String path, String sourceMap, @Nullable String webpackId) {
+    public JsonFileSpec(
+        @Nullable String src,
+        @Nullable String path,
+        @Nullable String sourceMap,
+        @Nullable String webpackId) {
       this.src = src;
       this.path = path;
       this.sourceMap = sourceMap;
@@ -3016,7 +3111,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** Flag types for JavaScript source files. */
-  @GwtIncompatible("Unnecessary")
   protected enum JsSourceType {
     EXTERN("extern"),
     JS("js"),
@@ -3032,7 +3126,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
   }
 
   /** A pair from flag to its value. */
-  @GwtIncompatible("Unnecessary")
   protected static class FlagEntry<T> {
     private final T flag;
     private final String value;
@@ -3155,7 +3248,6 @@ public abstract class AbstractCommandLineRunner<A extends Compiler, B extends Co
     }
   }
 
-  @GwtIncompatible("Unnecessary")
   static final class SystemExitCodeReceiver implements Function<Integer, Void> {
     static final SystemExitCodeReceiver INSTANCE = new SystemExitCodeReceiver();
 
