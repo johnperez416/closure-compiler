@@ -35,18 +35,18 @@ import com.google.javascript.jscomp.parsing.parser.util.SourcePosition;
 import com.google.javascript.rhino.ErrorReporter;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.StaticSourceFile;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** parser runner */
 public final class ParserRunner {
 
-  private static Set<String> annotationNames = null;
-  private static Set<String> suppressionNames = null;
-  private static Set<String> reservedVars = null;
-  private static Set<String> closurePrimitiveNames = null;
+  private static @Nullable ImmutableSet<String> annotationNames = null;
+  private static @Nullable ImmutableSet<String> suppressionNames = null;
+  private static @Nullable ImmutableSet<String> reservedVars = null;
+  private static @Nullable ImmutableSet<String> closurePrimitiveNames = null;
 
   // Should never need to instantiate class of static methods.
   private ParserRunner() {}
@@ -75,7 +75,7 @@ public final class ParserRunner {
     if (extraAnnotationNames == null) {
       effectiveAnnotationNames = annotationNames;
     } else {
-      effectiveAnnotationNames = new HashSet<>(annotationNames);
+      effectiveAnnotationNames = new LinkedHashSet<>(annotationNames);
       effectiveAnnotationNames.addAll(extraAnnotationNames);
     }
     return Config.builder()
@@ -90,12 +90,12 @@ public final class ParserRunner {
         .build();
   }
 
-  public static Set<String> getReservedVars() {
+  public static ImmutableSet<String> getReservedVars() {
     initResourceConfig();
     return reservedVars;
   }
 
-  public static Set<String> getSuppressionNames() {
+  public static ImmutableSet<String> getSuppressionNames() {
     initResourceConfig();
     return suppressionNames;
   }
@@ -125,7 +125,7 @@ public final class ParserRunner {
     String sourceName = sourceFile.getName();
     try {
       SourceFile file = new SourceFile(sourceName, sourceString);
-      boolean keepGoing = config.runMode() == Config.RunMode.KEEP_GOING;
+      boolean keepGoing = config.runMode() == RunMode.KEEP_GOING;
       Es6ErrorReporter es6ErrorReporter = new Es6ErrorReporter(errorReporter, keepGoing);
       com.google.javascript.jscomp.parsing.parser.Parser.Config es6config = newParserConfig(config);
       Parser p = new Parser(es6config, es6ErrorReporter, file);
@@ -134,8 +134,7 @@ public final class ParserRunner {
       List<Comment> comments = ImmutableList.of();
       FeatureSet features = p.getFeatures();
       if (tree != null && (!es6ErrorReporter.hadError() || keepGoing)) {
-        IRFactory factory =
-            IRFactory.transformTree(tree, sourceFile, sourceString, config, errorReporter);
+        IRFactory factory = IRFactory.transformTree(tree, sourceFile, config, errorReporter, file);
         root = factory.getResultNode();
         features = features.union(factory.getFeatures());
         root.putProp(Node.FEATURE_SET, features);
@@ -174,7 +173,7 @@ public final class ParserRunner {
       case ECMASCRIPT_2020:
       case ECMASCRIPT_2021:
       case ES_NEXT:
-      case ES_NEXT_IN:
+      case UNSTABLE:
       case UNSUPPORTED:
         parserConfigLanguageMode = Mode.ES8_OR_GREATER;
         break;
@@ -189,9 +188,7 @@ public final class ParserRunner {
     private boolean errorSeen = false;
     private final boolean reportAllErrors;
 
-    Es6ErrorReporter(
-        ErrorReporter reporter,
-        boolean reportAllErrors) {
+    Es6ErrorReporter(ErrorReporter reporter, boolean reportAllErrors) {
       this.reporter = reporter;
       this.reportAllErrors = reportAllErrors;
     }
@@ -202,28 +199,22 @@ public final class ParserRunner {
       // sometimes it is useful to keep going.
       if (reportAllErrors || !errorSeen) {
         errorSeen = true;
-        this.reporter.error(
-            message, location.source.name,
-            location.line + 1, location.column);
+        this.reporter.error(message, location.source.name, location.line + 1, location.column);
       }
     }
 
     @Override
     protected void reportWarning(SourcePosition location, String message) {
-      this.reporter.warning(
-          message, location.source.name,
-          location.line + 1, location.column);
+      this.reporter.warning(message, location.source.name, location.line + 1, location.column);
     }
   }
 
-  /**
-   * Holds results of parsing.
-   */
+  /** Holds results of parsing. */
   public static class ParseResult {
     public final Node ast;
     public final List<Comment> comments;
     public final FeatureSet features;
-    @Nullable public final String sourceMapURL;
+    public final @Nullable String sourceMapURL;
 
     public ParseResult(Node ast, List<Comment> comments, FeatureSet features, String sourceMapURL) {
       this.ast = ast;

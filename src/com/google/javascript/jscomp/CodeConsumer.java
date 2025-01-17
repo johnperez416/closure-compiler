@@ -21,6 +21,7 @@ import static com.google.javascript.jscomp.base.JSCompDoubles.isPositive;
 
 import com.google.errorprone.annotations.ForOverride;
 import com.google.javascript.rhino.Node;
+import java.math.BigInteger;
 
 /**
  * Abstracted consumer of the CodeGenerator output.
@@ -55,8 +56,14 @@ public abstract class CodeConsumer {
   }
 
   /**
-   * Provides a means of interrupting the CodeGenerator. Derived classes should
-   * return false to stop further processing.
+   * Indicates to the CodeConsumer that this Node might carry licensing information, and allows the
+   * code consumer to manage licenses as it sees fit.
+   */
+  void trackLicenses(Node node) {}
+
+  /**
+   * Provides a means of interrupting the CodeGenerator. Derived classes should return false to stop
+   * further processing.
    */
   boolean continueProcessing() {
     return true;
@@ -192,20 +199,23 @@ public abstract class CodeConsumer {
     maybeLineBreak();
   }
 
+  void optionalListSeparator() {}
+
   /**
-   * Indicates the end of a statement and a ';' may need to be added.
-   * But we don't add it now, in case we're at the end of a block (in which
-   * case we don't have to add the ';').
-   * See maybeEndStatement()
+   * Indicates the end of a statement and a ';' may need to be added. But we don't add it now, in
+   * case we're at the end of a block (in which case we don't have to add the ';'). See
+   * maybeEndStatement()
    */
-  void endStatement() {
-    endStatement(false);
+  void endStatement(boolean hasTrailingCommentOnSameLine) {
+    endStatement(false, hasTrailingCommentOnSameLine);
   }
 
-  void endStatement(boolean needSemiColon) {
+  void endStatement(boolean needSemiColon, boolean hasTrailingCommentOnSameLine) {
     if (needSemiColon) {
       append(";");
-      maybeLineBreak();
+      if (!hasTrailingCommentOnSameLine) {
+        maybeLineBreak();
+      }
       statementNeedsEnded = false;
     } else if (statementStarted) {
       statementNeedsEnded = true;
@@ -304,7 +314,7 @@ public abstract class CodeConsumer {
     } else if (Character.isLetter(first) && isWordChar(prev)) {
       // Make sure there is a space after e.g. instanceof , typeof
       append(" ");
-    } else if (prev == '-' && first == '>' || prev == '<' && first == '!') {
+    } else if ((prev == '-' && first == '>') || (prev == '<' && first == '!')) {
       // Make sure that we don't emit "<!--" or "-->"
       append(" ");
     }
@@ -358,6 +368,12 @@ public abstract class CodeConsumer {
     }
   }
 
+  void addBigInt(BigInteger bi) {
+    String hexEncoded = "0x" + bi.toString(16) + "n";
+    String decimalEncoded = bi + "n";
+    addConstant(hexEncoded.length() < decimalEncoded.length() ? hexEncoded : decimalEncoded);
+  }
+
   void addConstant(String newcode) {
     add(newcode);
   }
@@ -369,14 +385,14 @@ public abstract class CodeConsumer {
   }
 
   /**
-   * If the body of a for loop or the then clause of an if statement has
-   * a single statement, should it be wrapped in a block?  Doing so can
-   * help when pretty-printing the code, and permits putting a debugging
-   * breakpoint on the statement inside the condition.
+   * If the body of a for loop or the then clause of an if statement has a single statement, should
+   * it be wrapped in a block? Doing so can help when pretty-printing the code, and permits putting
+   * a debugging breakpoint on the statement inside the condition.
    *
+   * @param n node to process
    * @return {@boolean true} if such expressions should be wrapped
    */
-  boolean shouldPreserveExtraBlocks() {
+  boolean shouldPreserveExtras(Node n) {
     return false;
   }
 

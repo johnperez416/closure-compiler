@@ -25,9 +25,10 @@ import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.jscomp.resources.ResourceLoader;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.QualifiedName;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Injects polyfill libraries to ensure that ES6+ library functions are available.
@@ -44,6 +45,8 @@ public class RewritePolyfills implements CompilerPass {
       DiagnosticType.disabled(
           "JSC_INSUFFICIENT_OUTPUT_VERSION",
           "Built-in ''{0}'' not supported in output version {1}");
+
+  private static final QualifiedName JSCOMP_POLYFILL = QualifiedName.of("$jscomp.polyfill");
 
   private final AbstractCompiler compiler;
   private final Polyfills polyfills;
@@ -86,10 +89,10 @@ public class RewritePolyfills implements CompilerPass {
       // into a library method injected in this pass. Adding an externs declaration of that library
       // method prevents it from being dead-code-elimiated before polyfill isolation runs.
       Node jscompLookupMethodDecl = IR.var(IR.name("$jscomp$lookupPolyfilledValue"));
-      compiler
-          .getSynthesizedExternsInput()
-          .getAstRoot(compiler)
-          .addChildToBack(jscompLookupMethodDecl);
+      final Node synthesizedExternsAstRoot =
+          compiler.getSynthesizedExternsInput().getAstRoot(compiler);
+      jscompLookupMethodDecl.srcrefTree(synthesizedExternsAstRoot);
+      synthesizedExternsAstRoot.addChildToBack(jscompLookupMethodDecl);
       compiler.reportChangeToEnclosingScope(jscompLookupMethodDecl);
     }
 
@@ -142,13 +145,12 @@ public class RewritePolyfills implements CompilerPass {
    *
    * <p>Otherwise, return `null`.
    */
-  @Nullable
-  private FeatureSet getPolyfillSupportedFeatureSet(Node maybePolyfill) {
+  private @Nullable FeatureSet getPolyfillSupportedFeatureSet(Node maybePolyfill) {
     FeatureSet polyfillSupportFeatureSet = null;
     if (NodeUtil.isExprCall(maybePolyfill)) {
       Node call = maybePolyfill.getFirstChild();
       Node name = call.getFirstChild();
-      if (name.matchesQualifiedName("$jscomp.polyfill")) {
+      if (JSCOMP_POLYFILL.matches(name)) {
         final String nativeVersionStr = name.getNext().getNext().getNext().getString();
         polyfillSupportFeatureSet = FeatureSet.valueOf(nativeVersionStr);
         // Safari has been really slow to implement these regex features, even though it has

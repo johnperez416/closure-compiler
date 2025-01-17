@@ -66,7 +66,9 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   private Set<String> extraAnnotations;
   private Set<String> extraSuppressions;
   private Set<String> extraPrimitives;
+  private boolean allowClosureUnawareCode = false;
   private String prevLicense;
+  private JsDocInfoParser.JsDocSourceKind jsDocSourceKind;
 
   private static final String MISSING_TYPE_DECL_WARNING_TEXT = "Missing type declaration.";
   private static final MapBasedScope EMPTY_SCOPE = MapBasedScope.emptyScope();
@@ -90,6 +92,8 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     extraPrimitives.add("id");
     extraPrimitives.add("idA");
     extraPrimitives.add("idB");
+
+    jsDocSourceKind = JsDocInfoParser.JsDocSourceKind.NORMAL;
   }
 
   @Test
@@ -1258,16 +1262,17 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
 
   @Test
   public void testParseThrows1() {
-    JSDocInfo info = parse("@throws {number} Some number */");
-    assertThat(info.getThrownTypes()).hasSize(1);
-    assertTypeEquals(NUMBER_TYPE, info.getThrownTypes().get(0));
+    JSDocInfo info = parse("@throws {number} Some number */", true);
+    assertThat(info.getThrowsAnnotations()).containsExactly("{number} Some number");
   }
 
   @Test
   public void testParseThrows2() {
-    JSDocInfo info = parse("@throws {number} Some number\n " + "*@throws {String} A string */");
-    assertThat(info.getThrownTypes()).hasSize(2);
-    assertTypeEquals(NUMBER_TYPE, info.getThrownTypes().get(0));
+    JSDocInfo info =
+        parse("@throws {not a type}\n *     Bla\n " + "*@throws {String} A string */", true);
+    assertThat(info.getThrowsAnnotations())
+        .containsExactly("{not a type} Bla", "{String} A string")
+        .inOrder();
   }
 
   @Test
@@ -1507,6 +1512,27 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   }
 
   @Test
+  public void testParseExtends_multipleExtends() {
+    jsDocSourceKind = JsDocInfoParser.JsDocSourceKind.NORMAL;
+    parse(
+        "@extends {Foo}\n@extends {Bar} */",
+        "Bad type annotation. type annotation incompatible with other annotations. See"
+            + " https://github.com/google/closure-compiler/wiki/Annotating-JavaScript-for-the-Closure-Compiler"
+            + " for more information.");
+  }
+
+  @Test
+  public void testParseExtends_multipleExtendsTsickleMode() {
+    jsDocSourceKind = JsDocInfoParser.JsDocSourceKind.TSICKLE;
+    JSDocInfo result = parse("@extends {Foo}\n@extends {Bar} */");
+    // Treated as "@extends {JsDocInfoParser_TsickleMode_MissingSupertypePlaceholder}"
+    // which has an implicit "!" (Token.BANG) when parsed.
+    assertNode(result.getBaseType().getRoot()).hasToken(Token.BANG);
+    assertNode(result.getBaseType().getRoot().getOnlyChild())
+        .isString("JsDocInfoParser_TsickleMode_MissingSupertypePlaceholder");
+  }
+
+  @Test
   public void testParseEnum1() {
     assertTypeEquals(NUMBER_TYPE, parse("@enum*/").getEnumParameterType());
   }
@@ -1706,6 +1732,11 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     JSDocInfo info = parse("@closurePrimitive {id} some comment\n@const */");
     assertThat(info.getClosurePrimitiveId()).isEqualTo("id");
     assertThat(info.isConstant()).isTrue();
+  }
+
+  @Test
+  public void testParseTsType() {
+    assertThat(parse("@tsType ():this */").getTsTypes()).containsExactly("():this");
   }
 
   @Test
@@ -1935,8 +1966,9 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   @Test
   public void testStackedAnnotation8() {
     JSDocInfo info = parse("@throws {number} @constructor */", true);
-    assertThat(info.getThrownTypes()).isNotEmpty();
-    assertThat(info.isConstructor()).isTrue();
+    assertThat(info.getThrowsAnnotations()).isNotEmpty();
+    // The @constructor annotation gets swallowed as part of the throws annotation.
+    assertThat(info.isConstructor()).isFalse();
 
     info = parse("@return {number} @constructor */", false);
     assertThat(info.hasReturnType()).isTrue();
@@ -2242,6 +2274,84 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   }
 
   @Test
+  public void testParseClosureUnawareCode1() {
+    assertThat(
+            parseFileOverview(
+                    "@fileoverview\n@closureUnaware*/",
+                    "@closureUnaware annotation is not allowed in this compilation")
+                .isClosureUnawareCode())
+        .isTrue();
+  }
+
+  @Test
+  public void testParseClosureUnawareCode2() {
+    parseFileOverview(
+        "@closureUnaware\n@closureUnaware*/",
+        "@closureUnaware annotation is not allowed in this compilation",
+        "extra @closureUnaware tag");
+  }
+
+  @Test
+  public void testParseNoClosureUnawareCode() {
+    assertThat(parseFileOverview("@fileoverview*/").isClosureUnawareCode()).isFalse();
+  }
+
+  @Test
+  public void testParseClosureUnawareCode() {
+    assertThat(
+            parse(
+                    "@closureUnaware*/",
+                    "@closureUnaware annotation is not allowed in this compilation")
+                .isClosureUnawareCode())
+        .isTrue();
+  }
+
+  @Test
+  public void testParseClosureUnawareCode_allowed() {
+    allowClosureUnawareCode = true;
+    assertThat(parse("@closureUnaware*/").isClosureUnawareCode()).isTrue();
+  }
+
+  @Test
+  public void testParseClosureUnawareCode_fileoverview_allowed() {
+    allowClosureUnawareCode = true;
+    assertThat(parseFileOverview("@fileoverview\n@closureUnaware*/").isClosureUnawareCode())
+        .isTrue();
+  }
+
+  @Test
+  public void testParseClosureUnawareCode_doesNotCreateFileoverviewCommentStandalone() {
+    allowClosureUnawareCode = true;
+    assertThat(parseFileOverview("@closureUnaware*/")).isNull();
+  }
+
+  @Test
+  public void testParseNoCoverage_fileOverview() {
+    assertThat(parseFileOverview("@nocoverage*/").isNoCoverage()).isTrue();
+  }
+
+  @Test
+  public void testParseNoCoverage_extraTag() {
+    parseFileOverview("@nocoverage\n@nocoverage*/", "extra @nocoverage tag");
+  }
+
+  @Test
+  public void testParseNoCoverage_nonFileOverview() {
+    assertThat(parse("@nocoverage*/")).isNull();
+  }
+
+  @Test
+  public void testParseNoDts1() {
+    JSDocInfo doc = parse("@nodts*/", true);
+    assertThat(doc.isNoDts()).isTrue();
+  }
+
+  @Test
+  public void testParseNoDts2() {
+    parse("@nodts\n@nodts*/", JsDocParsing.INCLUDE_DESCRIPTIONS_NO_WHITESPACE, "extra @nodts tag");
+  }
+
+  @Test
   public void testBugAnnotation() {
     parse("@bug */");
   }
@@ -2311,13 +2421,13 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
 
   @Test
   public void testRegression4() {
-    String comment = " * @const\n" + " * @hidden\n" + " * @constructor\n" + " */";
+    String comment = " * @const\n" + " * @private\n" + " * @constructor\n" + " */";
 
     JSDocInfo info = parse(comment);
     assertThat(info.isConstant()).isTrue();
     assertThat(info.isDefine()).isFalse();
     assertThat(info.isConstructor()).isTrue();
-    assertThat(info.isHidden()).isTrue();
+    assertThat(info.getVisibility()).isEqualTo(Visibility.PRIVATE);
   }
 
   @Test
@@ -2328,16 +2438,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(info.isConstant()).isTrue();
     assertThat(info.isDefine()).isFalse();
     assertTypeEquals(STRING_TYPE, info.getEnumParameterType());
-    assertThat(info.getVisibility()).isEqualTo(Visibility.PUBLIC);
-  }
-
-  @Test
-  public void testRegression6() {
-    String comment = "@hidden\n@enum\n@public*/";
-
-    JSDocInfo info = parse(comment);
-    assertThat(info.isHidden()).isTrue();
-    assertTypeEquals(NUMBER_TYPE, info.getEnumParameterType());
     assertThat(info.getVisibility()).isEqualTo(Visibility.PUBLIC);
   }
 
@@ -2380,7 +2480,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isFalse();
     assertThat(jsdoc.getDescription()).isNull();
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(1);
     assertTypeEquals(STRING_TYPE, jsdoc.getParameterType("p0"));
     assertThat(jsdoc.getReturnType()).isNull();
@@ -2401,7 +2500,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isFalse();
     assertThat(jsdoc.getDescription()).isNull();
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(2);
     assertTypeEquals(STRING_OBJECT_TYPE, jsdoc.getParameterType("p0"));
     assertTypeEquals(BOOLEAN_TYPE, jsdoc.getParameterType("p1"));
@@ -2418,7 +2516,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isFalse();
     assertThat(jsdoc.getDescription()).isNull();
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(0);
     assertThat(jsdoc.getReturnType()).isNull();
     assertThat(jsdoc.getType()).isNull();
@@ -2433,7 +2530,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isFalse();
     assertThat(jsdoc.getDescription()).isNull();
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(0);
     assertThat(jsdoc.getReturnType()).isNull();
     assertThat(jsdoc.getType()).isNull();
@@ -2448,7 +2544,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isFalse();
     assertThat(jsdoc.getDescription()).isNull();
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(0);
     assertThat(jsdoc.getReturnType()).isNull();
     assertTypeEquals(REGEXP_TYPE, jsdoc.getType());
@@ -2463,7 +2558,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isTrue();
     assertThat(jsdoc.getDescription()).isNull();
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(0);
     assertThat(jsdoc.getReturnType()).isNull();
     assertThat(jsdoc.getType()).isNull();
@@ -2478,7 +2572,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.isConstant()).isTrue();
     assertThat(jsdoc.getDescription()).isEqualTo("Hello, World!");
     assertThat(jsdoc.getEnumParameterType()).isNull();
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(0);
     assertThat(jsdoc.getReturnType()).isNull();
     assertThat(jsdoc.getType()).isNull();
@@ -2493,7 +2586,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     assertThat(jsdoc.getBaseType()).isNull();
     assertThat(jsdoc.isConstant()).isFalse();
     assertTypeEquals(STRING_TYPE, jsdoc.getType());
-    assertThat(jsdoc.isHidden()).isFalse();
     assertThat(jsdoc.getParameterCount()).isEqualTo(0);
     assertThat(jsdoc.getReturnType()).isNull();
     assertThat(jsdoc.getVisibility()).isEqualTo(Visibility.INHERITED);
@@ -2850,6 +2942,80 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   }
 
   @Test
+  public void testSuppressWithDescription() {
+    String jsDocComment =
+        lines(
+            "@suppress {x,y} Some description.",
+            " * @suppress {z}", // no description
+            "*/");
+    JSDocInfo info = parse(jsDocComment, /* parseDocumentation= */ true);
+    assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("x", "y", "z"));
+    assertThat(info.getSuppressionsAndTheirDescription())
+        .containsEntry(ImmutableSet.of("x", "y"), "Some description.");
+    assertThat(info.getSuppressionsAndTheirDescription()).containsEntry(ImmutableSet.of("z"), "");
+  }
+
+  @Test
+  public void testSuppressWithDescription_multipleLines() {
+    String jsDocComment =
+        lines(
+            "@suppress {x,y} Some description.",
+            " * Spans across lines.",
+            " * @suppress {z}", // no description
+            "*/");
+    JSDocInfo info = parse(jsDocComment, /* parseDocumentation= */ true);
+    assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("x", "y", "z"));
+    assertThat(info.getSuppressionsAndTheirDescription())
+        .containsEntry(ImmutableSet.of("x", "y"), "Some description. Spans across lines.");
+    assertThat(info.getSuppressionsAndTheirDescription()).containsEntry(ImmutableSet.of("z"), "");
+  }
+
+  @Test
+  public void testSuppressWithDescription_multipleLines_withOtherAnnotations() {
+    String jsDocComment =
+        lines(
+            "@author XYZ",
+            " * @suppress {x,y} Some description.",
+            " * Spans across lines.",
+            " * @override",
+            " * @suppress {z}", // no description
+            "*/");
+    JSDocInfo info = parse(jsDocComment, /* parseDocumentation= */ true);
+    assertThat(info.getAuthors()).contains("XYZ");
+    assertThat(info.isOverride()).isTrue();
+    assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("x", "y", "z"));
+    assertThat(info.getSuppressionsAndTheirDescription())
+        .containsEntry(ImmutableSet.of("x", "y"), "Some description. Spans across lines.");
+    assertThat(info.getSuppressionsAndTheirDescription()).containsEntry(ImmutableSet.of("z"), "");
+  }
+
+  // When exact warning is repeated in another @suppress annotation, JSDocInfoParser does not save
+  // the second annotation.
+  @Test
+  public void testSuppressWithDescription_repeatedWarnings1() {
+    String jsDocComment =
+        lines("@suppress {x} Some description.", " * @suppress {x} Another description.", "*/");
+    JSDocInfo info = parse(jsDocComment, /* parseDocumentation= */ true);
+    assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("x"));
+    assertThat(info.getSuppressionsAndTheirDescription())
+        .containsExactly(ImmutableSet.of("x"), "Some description.");
+  }
+
+  // A different @suppress annotation containing a non-repeated warning, we store both annotations.
+  @Test
+  public void testSuppressWithDescription_repeatedWarnings2() {
+    String jsDocComment =
+        lines("@suppress {x} Some description.", " * @suppress {x, y} Another description.", "*/");
+    JSDocInfo info = parse(jsDocComment, /* parseDocumentation= */ true);
+    assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("x", "y"));
+    assertThat(info.getSuppressionsAndTheirDescription()).hasSize(2);
+    assertThat(info.getSuppressionsAndTheirDescription())
+        .containsEntry(ImmutableSet.of("x"), "Some description.");
+    assertThat(info.getSuppressionsAndTheirDescription())
+        .containsEntry(ImmutableSet.of("x", "y"), "Another description.");
+  }
+
+  @Test
   public void testSuppress2() {
     JSDocInfo info = parse("@suppress {x|y|x|z} */");
     assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("x", "y", "z"));
@@ -2901,6 +3067,59 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   @Test
   public void testBadSuppress8() {
     parse("@suppress */", "malformed @suppress tag");
+  }
+
+  @Test
+  public void testMods1() {
+    JSDocInfo info = parseFileOverview("@mods {ns.Foo} */");
+    assertThat(info.getMods()).isEqualTo("ns.Foo");
+  }
+
+  @Test
+  public void testMods2() {
+    JSDocInfo info = parseFileOverview("@mods {google3.path.to.file} */");
+    assertThat(info.getMods()).isEqualTo("google3.path.to.file");
+  }
+
+  @Test
+  public void testJsDocAfterMods() {
+    JSDocInfo info = parseFileOverview("@mods {ns.Foo} @modName {new_feature_flag} */");
+    assertThat(info.getMods()).isEqualTo("ns.Foo");
+  }
+
+  @Test
+  public void testMultipleModsTags() {
+    parseFileOverview("@mods {ns.Foo} \n * @mods {ns.Bar} */", "extra @mods tag");
+  }
+
+  @Test
+  public void testBadMods1() {
+    parseFileOverview("@mods {} */", "malformed @mods tag");
+  }
+
+  @Test
+  public void testBadMods2() {
+    parseFileOverview("@mods { */", "malformed @mods tag");
+  }
+
+  @Test
+  public void testBadMods3() {
+    parseFileOverview("@mods } */", "malformed @mods tag");
+  }
+
+  @Test
+  public void testBadMods4() {
+    parseFileOverview("@mods ns.Foo */", "malformed @mods tag");
+  }
+
+  @Test
+  public void testBadMods5() {
+    parseFileOverview("@mods {ns.Foo */", "malformed @mods tag");
+  }
+
+  @Test
+  public void testBadMods6() {
+    parseFileOverview("@mods ns.Foo} */", "malformed @mods tag");
   }
 
   @Test
@@ -3066,14 +3285,12 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   public void testSingleTags() {
     JSDocInfo jsdoc =
         parse(
-            "@version Some old version"
-                + "\n* @deprecated In favor of the new one!"
+            "@deprecated In favor of the new one!"
                 + "\n* @return {SomeType} The most important object :-)*/",
             true);
 
     assertThat(jsdoc.isDeprecated()).isTrue();
     assertThat(jsdoc.getDeprecationReason()).isEqualTo("In favor of the new one!");
-    assertThat(jsdoc.getVersion()).isEqualTo("Some old version");
     assertThat(jsdoc.getReturnDescription()).isEqualTo("The most important object :-)");
   }
 
@@ -3089,27 +3306,12 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     JSDocInfo jsdoc =
         parse(
             "@deprecated In favor of the new one!"
-                + "\n * @return {SomeType} The most important object :-)"
-                + "\n * @version Some old version*/",
+                + "\n * @return {SomeType} The most important object :-)*/",
             true);
 
     assertThat(jsdoc.isDeprecated()).isTrue();
     assertThat(jsdoc.getDeprecationReason()).isEqualTo("In favor of the new one!");
-    assertThat(jsdoc.getVersion()).isEqualTo("Some old version");
     assertThat(jsdoc.getReturnDescription()).isEqualTo("The most important object :-)");
-  }
-
-  @Test
-  public void testVersionDuplication() {
-    parse(
-        "* @version Some old version" + "\n* @version Another version*/",
-        true,
-        "conflicting @version tag");
-  }
-
-  @Test
-  public void testVersionMissing() {
-    parse("* @version */", true, "@version tag missing version information");
   }
 
   @Test
@@ -3182,7 +3384,7 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     JSDocInfo jsdoc =
         parse("@return {Foo} some long \n * multiline" + " \n * description */", true);
 
-    JSDocInfo.Marker returnDoc = assertAnnotationMarker(jsdoc, "return", 0, 0);
+    Marker returnDoc = assertAnnotationMarker(jsdoc, "return", 0, 0);
     assertDocumentationInMarker(returnDoc, "some long multiline description", 14, 2, 15);
     assertThat(returnDoc.getType().getPositionOnStartLine()).isEqualTo(8);
     assertThat(returnDoc.getType().getPositionOnEndLine()).isEqualTo(12);
@@ -3789,6 +3991,12 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   }
 
   @Test
+  public void testParserWithTemplateTypeNameWithDollar() {
+    JSDocInfo info = parse("@template A,B$,C */");
+    assertThat(info.getTemplateTypeNames()).containsExactly("A", "B$", "C");
+  }
+
+  @Test
   public void testParserWithTypeTransformationNewline() {
     parse("@template R := \n 'string' =:*/");
   }
@@ -3834,14 +4042,31 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   }
 
   @Test
-  public void testTTLLineNumber() {
+  public void testTTLLineNoCharNo() {
     JSDocInfo info =
         parse(
             LINE_JOINER.join(
-                "Some text on line 1", "More text! This is line 2", "@template T := foo =:*/"));
+                "Some text on line 0", "More text! This is line 1", "@template T := foo =:*/"));
     assertThat(info.getTypeTransformations()).hasSize(1);
     Node n = info.getTypeTransformations().get("T");
-    assertNode(n).hasLineno(3);
+    assertNode(n).hasLineno(2); // lineno of "@" in "@template"
+    assertNode(n).hasCharno(0); // charno of "@" in "@template"
+  }
+
+  @Test
+  public void testMultilineTTLLineNoCharNo() {
+    JSDocInfo info =
+        parse(
+            LINE_JOINER.join(
+                "Some text on line 0",
+                "More text! This is line 1",
+                "@template T :=",
+                "  foo",
+                "=:*/"));
+    assertThat(info.getTypeTransformations()).hasSize(1);
+    Node n = info.getTypeTransformations().get("T");
+    assertNode(n).hasLineno(2); // lineno of "@" in "@template"
+    assertNode(n).hasCharno(0); // charno of "@" in "@template"
   }
 
   @Test
@@ -5054,17 +5279,20 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
             + "* @externs \n"
             + "* @field \n"
             + "* @function \n"
+            + "* @delcall \n"
+            + "* @deltemplate \n"
             + "* @hassoydelcall \n"
             + "* @hassoydeltemplate \n"
             + "* @id \n"
             + "* @ignore \n"
+            + "* @jsx \n"
+            + "* @jsxFrag \n"
             + "* @inner \n"
             + "* @lends {string} \n"
             + "* @link \n"
             + "* @member \n"
             + "* @memberOf \n"
             + "* @modName \n"
-            + "* @mods \n"
             + "* @name \n"
             + "* @namespace \n"
             + "* @ngInject \n"
@@ -5079,6 +5307,7 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
             + "* @static \n"
             + "* @supported\n"
             + "* @wizaction \n"
+            + "* @wizcallback \n"
             + "*/");
   }
 
@@ -5104,7 +5333,7 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     String comment = "* @desc This is a comment */";
     JSDocInfo info = parse(comment);
     assertThat(info.getOriginalCommentString()).isNull();
-    info = parse(comment, true /* parseDocumentation */);
+    info = parse(comment, /* parseDocumentation= */ true);
     assertThat(info.getOriginalCommentString()).isEqualTo(comment);
   }
 
@@ -5176,6 +5405,16 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   }
 
   @Test
+  public void testParseSassGeneratedCssTs() {
+    assertThat(parse("@sassGeneratedCssTs*/").isSassGeneratedCssTs()).isTrue();
+  }
+
+  @Test
+  public void testParseSassGeneratedCssTsExtra() {
+    parse("@sassGeneratedCssTs \n@sassGeneratedCssTs*/", "extra @sassGeneratedCssTs tag");
+  }
+
+  @Test
   public void testParseWizaction1() {
     assertThat(parse("@wizaction*/").isWizaction()).isTrue();
   }
@@ -5183,6 +5422,27 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   @Test
   public void testParseWizaction2() {
     parse("@wizaction \n@wizaction*/", "extra @wizaction tag");
+  }
+
+  @Test
+  public void testParseProvideAlreadyProvided() {
+    assertThat(parse("@provideAlreadyProvided*/").isProvideAlreadyProvided()).isTrue();
+  }
+
+  @Test
+  public void testParseProvideAlreadyProvidedExtra() {
+    parse(
+        "@provideAlreadyProvided \n@provideAlreadyProvided*/", "extra @provideAlreadyProvided tag");
+  }
+
+  @Test
+  public void testParseWizcallback() {
+    assertThat(parse("@wizcallback*/").isWizcallback()).isTrue();
+  }
+
+  @Test
+  public void testParseWizcallbackExpectDuplicateError() {
+    parse("@wizcallback \n@wizcallback*/", "extra @wizcallback tag");
   }
 
   @Test
@@ -5202,30 +5462,6 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
   public void testParsePureOrBreakMyCode() {
     JSDocInfo jsDocInfo = parse("@pureOrBreakMyCode */");
     assertThat(jsDocInfo.isPureOrBreakMyCode()).isTrue();
-  }
-
-  @Test
-  public void testParseLocaleFile() {
-    JSDocInfo jsDocInfo = parse("@localeFile */");
-    assertThat(jsDocInfo.isLocaleFile()).isTrue();
-  }
-
-  @Test
-  public void testParseLocaleObject() {
-    JSDocInfo jsDocInfo = parse("@localeObject */");
-    assertThat(jsDocInfo.isLocaleObject()).isTrue();
-  }
-
-  @Test
-  public void testParseLocaleSelect() {
-    JSDocInfo jsDocInfo = parse("@localeSelect */");
-    assertThat(jsDocInfo.isLocaleSelect()).isTrue();
-  }
-
-  @Test
-  public void testParseLocaleValue() {
-    JSDocInfo jsDocInfo = parse("@localeValue */");
-    assertThat(jsDocInfo.isLocaleValue()).isTrue();
   }
 
   @Test
@@ -5310,7 +5546,7 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
 
     assertThat(jsdoc.getMarkers().iterator().next().getDescription().getItem())
         .isEqualTo(
-            "this is a nice comment\n that spans multiple lines\n"
+            "{string} this is a nice comment\n that spans multiple lines\n"
                 + "     with custom\n"
                 + "     formatting\n"
                 + " ");
@@ -5593,8 +5829,8 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
    * @param endCharno The ending character of the text.
    * @return The marker, for chaining purposes.
    */
-  private static JSDocInfo.Marker assertDocumentationInMarker(
-      JSDocInfo.Marker marker, String description, int startCharno, int endLineno, int endCharno) {
+  private static Marker assertDocumentationInMarker(
+      Marker marker, String description, int startCharno, int endLineno, int endCharno) {
     assertThat(marker.getDescription()).isNotNull();
     assertThat(marker.getDescription().getItem()).isEqualTo(description);
 
@@ -5616,8 +5852,8 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
    * @param hasBrackets Whether the type in the type field is expected to have brackets.
    * @return The marker, for chaining purposes.
    */
-  private static JSDocInfo.Marker assertTypeInMarker(
-      JSDocInfo.Marker marker,
+  private static Marker assertTypeInMarker(
+      Marker marker,
       String typeName,
       int startLineno,
       int startCharno,
@@ -5649,8 +5885,8 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
    * @param startCharno The starting character of the text.
    * @return The marker, for chaining purposes.
    */
-  private static JSDocInfo.Marker assertNameInMarker(
-      JSDocInfo.Marker marker, String name, int startLine, int startCharno) {
+  private static Marker assertNameInMarker(
+      Marker marker, String name, int startLine, int startCharno) {
     assertThat(marker.getNameNode()).isNotNull();
     assertThat(marker.getNameNode().getItem().getString()).isEqualTo(name);
 
@@ -5673,7 +5909,7 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
    * @param startCharno The expected character on the starting line.
    * @return The marker found, for further testing.
    */
-  private static JSDocInfo.Marker assertAnnotationMarker(
+  private static Marker assertAnnotationMarker(
       JSDocInfo jsdoc, String annotationName, int startLineno, int startCharno) {
     return assertAnnotationMarker(jsdoc, annotationName, startLineno, startCharno, 0);
   }
@@ -5690,16 +5926,16 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
    * @param index The index of the marker.
    * @return The marker found, for further testing.
    */
-  private static JSDocInfo.Marker assertAnnotationMarker(
+  private static Marker assertAnnotationMarker(
       JSDocInfo jsdoc, String annotationName, int startLineno, int startCharno, int index) {
 
-    Collection<JSDocInfo.Marker> markers = jsdoc.getMarkers();
+    Collection<Marker> markers = jsdoc.getMarkers();
 
     assertThat(markers).isNotEmpty();
 
     int counter = 0;
 
-    for (JSDocInfo.Marker marker : markers) {
+    for (Marker marker : markers) {
       if (marker.getAnnotation() != null) {
         if (annotationName.equals(marker.getAnnotation().getItem())) {
 
@@ -5764,8 +6000,8 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     return parse(
         comment,
         parseDocumentation
-            ? Config.JsDocParsing.INCLUDE_DESCRIPTIONS_NO_WHITESPACE
-            : Config.JsDocParsing.TYPES_ONLY,
+            ? JsDocParsing.INCLUDE_DESCRIPTIONS_NO_WHITESPACE
+            : JsDocParsing.TYPES_ONLY,
         warnings);
   }
 
@@ -5779,6 +6015,11 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
       boolean parseFileOverview,
       String... warnings) {
     TestErrorReporter errorReporter = new TestErrorReporter().expectAllWarnings(warnings);
+    if (allowClosureUnawareCode) {
+      var unused =
+          errorReporter.expectAllWarnings(
+              "@closureUnaware annotation is not allowed in this compilation");
+    }
 
     Config config =
         Config.builder()
@@ -5788,7 +6029,7 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
             .setClosurePrimitiveNames(extraPrimitives)
             .setLanguageMode(LanguageMode.ECMASCRIPT3)
             .setParseInlineSourceMaps(true)
-            .setStrictMode(Config.StrictMode.SLOPPY)
+            .setStrictMode(StrictMode.SLOPPY)
             .build();
 
     StaticSourceFile file = new SimpleSourceFile("testcode", SourceKind.STRONG);
@@ -5796,7 +6037,8 @@ public final class JsDocInfoParserTest extends BaseJSTypeTestCase {
     templateNode.setStaticSourceFile(file);
 
     JsDocInfoParser jsdocParser =
-        new JsDocInfoParser(stream(comment), comment, 0, templateNode, config, errorReporter);
+        new JsDocInfoParser(
+            stream(comment), comment, 0, templateNode, config, jsDocSourceKind, errorReporter);
 
     jsdocParser.parse();
     this.prevLicense = jsdocParser.getLicenseText();

@@ -17,10 +17,10 @@ package com.google.javascript.jscomp;
 
 import static com.google.javascript.jscomp.parsing.Config.JsDocParsing.INCLUDE_ALL_COMMENTS;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.deps.ModuleLoader.ResolutionMode;
 import com.google.javascript.jscomp.parsing.Config.JsDocParsing;
@@ -29,7 +29,6 @@ import com.google.javascript.refactoring.FixingErrorManager;
 import com.google.javascript.refactoring.SuggestedFix;
 import java.io.IOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Collection;
 
 /**
@@ -37,7 +36,6 @@ import java.util.Collection;
  *
  * <p>Run from {@link LinterMain}
  */
-@GwtIncompatible("Unnecessary")
 public final class Linter {
 
   /**
@@ -71,24 +69,23 @@ public final class Linter {
 
       options.setWarningLevel(DiagnosticGroups.JSDOC_MISSING_TYPE, CheckLevel.ERROR);
       options.setWarningLevel(DiagnosticGroups.MISPLACED_MSG_ANNOTATION, CheckLevel.WARNING);
-      options.setWarningLevel(DiagnosticGroups.UNNECESSARY_ESCAPE, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.UNUSED_LOCAL_VARIABLE, CheckLevel.WARNING);
-      options.setWarningLevel(DiagnosticGroups.UNUSED_PRIVATE_PROPERTY, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.EXTRA_REQUIRE, CheckLevel.ERROR);
       options.setWarningLevel(DiagnosticGroups.MISPLACED_SUPPRESS, CheckLevel.WARNING);
       options.setWarningLevel(DiagnosticGroups.TYPE_IMPORT_CODE_REFERENCES, CheckLevel.ERROR);
       options.setWarningLevel(DiagnosticGroups.MODULE_LOAD, CheckLevel.OFF);
       options.setWarningLevel(DiagnosticGroups.STRICT_MODULE_CHECKS, CheckLevel.WARNING);
-      options.setWarningLevel(DiagnosticGroups.UNDERSCORE, CheckLevel.WARNING);
       options.setSummaryDetailLevel(0);
     }
 
+    @CanIgnoreReturnValue
     public Builder withModuleResolutionMode(ResolutionMode moduleResolutionMode) {
       options.setModuleResolutionMode(moduleResolutionMode);
       return this;
     }
 
+    @CanIgnoreReturnValue
     public Builder withBrowserResolverPrefixReplacements(
         ImmutableMap<String, String> replacements) {
       options.setBrowserResolverPrefixReplacements(replacements);
@@ -114,11 +111,11 @@ public final class Linter {
     return new Builder();
   }
 
-  void lint(String filename) throws IOException {
-    lint(Paths.get(filename), new Compiler(System.out));
+  void lint(String filename) {
+    lint(Path.of(filename), new Compiler(System.out));
   }
 
-  void lint(Path path, Compiler compiler) throws IOException {
+  void lint(Path path, Compiler compiler) {
     SourceFile file = SourceFile.fromFile(path.toString());
     compiler.setPassConfig(new LintPassConfig(options));
     compiler.disableThreads();
@@ -155,7 +152,7 @@ public final class Linter {
     compiler.setErrorManager(errorManager);
     errorManager.setCompiler(compiler);
 
-    lint(Paths.get(filename), compiler);
+    lint(Path.of(filename), compiler);
 
     Collection<SuggestedFix> fixes = errorManager.getSureFixes();
     if (!fixes.isEmpty()) {

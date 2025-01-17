@@ -24,12 +24,13 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public final class RewriteNullishCoalesceOperatorTest extends CompilerTestCase {
 
-  @Override
   @Before
-  public void setUp() throws Exception {
-    super.setUp();
+  public void customSetUp() throws Exception {
+    enableNormalize();
     enableTypeCheck();
     enableTypeInfoValidation();
+    replaceTypesWithColors();
+    enableMultistageCompilation();
   }
 
   @Override
@@ -53,6 +54,15 @@ public final class RewriteNullishCoalesceOperatorTest extends CompilerTestCase {
         expected(
             "let $jscomp$nullish$tmp0; ($jscomp$nullish$tmp0 = x + y) != null ?"
                 + " $jscomp$nullish$tmp0 : (a && b)"));
+  }
+
+  @Test
+  public void insideArrowFunctionBody() {
+    test(
+        srcs("() => (x + y) ?? (a && b)"),
+        expected(
+            "() => { let $jscomp$nullish$tmp0; return ($jscomp$nullish$tmp0 = x + y) != null ?"
+                + " $jscomp$nullish$tmp0 : (a && b) }"));
   }
 
   @Test

@@ -29,6 +29,7 @@ import static com.google.javascript.jscomp.CheckAccessControls.DEPRECATED_NAME_R
 import static com.google.javascript.jscomp.CheckAccessControls.DEPRECATED_PROP;
 import static com.google.javascript.jscomp.CheckAccessControls.DEPRECATED_PROP_REASON;
 import static com.google.javascript.jscomp.CheckAccessControls.EXTEND_FINAL_CLASS;
+import static com.google.javascript.jscomp.CheckAccessControls.FINAL_PROPERTY_OVERRIDDEN;
 import static com.google.javascript.jscomp.CheckAccessControls.PRIVATE_OVERRIDE;
 import static com.google.javascript.jscomp.CheckAccessControls.VISIBILITY_MISMATCH;
 
@@ -76,6 +77,68 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
     options.setWarningLevel(DiagnosticGroups.DEPRECATED, CheckLevel.ERROR);
     options.setWarningLevel(DiagnosticGroups.CONSTANT_PROPERTY, CheckLevel.ERROR);
     return options;
+  }
+
+  @Test
+  public void testOverrideAllowed() {
+    testSame(
+        lines(
+            "class Foo {", //
+            "  /** @final*/ x;",
+            "  constructor() {",
+            "    this.x = 5;",
+            "  }",
+            "}"));
+  }
+
+  @Test
+  public void testMultipleFieldsOverrideAllowed() {
+    testSame(
+        lines(
+            "class Bar {", //
+            "  /** @final*/ a;",
+            "  /** @final */ b;",
+            "  constructor() {",
+            "    this.a = 1;",
+            "    this.b = 2;",
+            "  }",
+            "}"));
+  }
+
+  @Test
+  public void testFieldOverrideNotAllowed() {
+    testError(
+        lines(
+            "class Bar {", //
+            "  /** @final*/ a;",
+            "  constructor() {",
+            "    this.a = 1;",
+            "    this.a = 2;",
+            "  }",
+            "}"),
+        FINAL_PROPERTY_OVERRIDDEN);
+
+    testError(
+        lines(
+            "class Bar {", //
+            "  /** @final*/ a = 5;",
+            "  constructor() {",
+            "    this.a = 1;",
+            "  }",
+            "}"),
+        FINAL_PROPERTY_OVERRIDDEN);
+  }
+
+  @Test
+  public void testThisAssignmentInConstructor() {
+    testSame(
+        lines(
+            "class Foo {", //
+            "  constructor() {",
+            "    /** @const {number} */ this.x;",
+            "    this.x = 4;",
+            "  }",
+            "}"));
   }
 
   @Test
@@ -266,6 +329,41 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testNoWarningOnClassField_deprecated1() {
+    // TODO(b/239747805): Should throw deprecatedProp warning
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /**",
+                "   * @type {number}",
+                "   * @deprecated No.",
+                "   */",
+                "  static x=1;",
+                "}",
+                "Foo.x;")));
+  }
+
+  @Test
+  public void testNoWarningOnClassField_deprecated2() {
+    // TODO(b/239747805): Should say "Property x of type number" not "super"
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /**",
+                "   * @type {number}",
+                "   * @deprecated No.",
+                "   */",
+                "  static x = 1;",
+                "}",
+                "class Bar extends Foo {",
+                "  static y = super.x;",
+                "}")),
+        deprecatedProp("Property x of type super has been deprecated: No."));
+  }
+
+  @Test
   public void testNoWarningInDeprecatedClass() {
     test(
         srcs(
@@ -335,6 +433,81 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
                 "  static bar() { f(); }",
                 "};")),
         deprecatedName("Variable f has been deprecated: crazy!"));
+  }
+
+  @Test
+  public void testWarningInClassStaticBlock() {
+    test(
+        srcs(
+            lines(
+                "/** @deprecated Oh No! */",
+                "function f() {}",
+                "",
+                "class Foo {",
+                "  static { f(); }",
+                "}")),
+        deprecatedName("Variable f has been deprecated: Oh No!"));
+  }
+
+  @Test
+  public void testWarningInClassStaticBlock1() {
+    test(
+        srcs(
+            lines(
+                "/** @deprecated Woah! */", //
+                "var x;",
+                "",
+                "class Foo {",
+                "  static { x; }",
+                "}")),
+        deprecatedName("Variable x has been deprecated: Woah!"));
+  }
+
+  @Test
+  public void testWarningInClassStaticBlock2() {
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @deprecated Bad :D */",
+                "   static x = 1;",
+                "   static {",
+                "      var y = this.x;",
+                "   }",
+                "}")),
+        deprecatedProp("Property x of type this has been deprecated: Bad :D"));
+  }
+
+  @Test
+  public void testNoWarningInClassStaticBlock() {
+    // TODO(b/235871861): Compiler should throw warning as it doesn't make sense to deprecate a
+    // static block
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @deprecated D: */",
+                "  static {",
+                "  }",
+                "}")));
+  }
+
+  @Test
+  public void testNoWarningInClassStaticBlock1() {
+    // TODO(b/239747805): Should say "Property x of type number" not "super"
+    test(
+        srcs(
+            lines(
+                "class A {",
+                "  /** @deprecated Meow! */",
+                "  static x = 1;",
+                "}",
+                "class B extends A {",
+                "  static {",
+                "    this.y = super.x;",
+                "  }",
+                "}")),
+        deprecatedProp("Property x of type super has been deprecated: Meow!"));
   }
 
   @Test
@@ -943,6 +1116,38 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
                 "  bar = 2",
                 "}"),
             lines("new Foo().bar = 4")),
+        error(BAD_PRIVATE_PROPERTY_ACCESS));
+  }
+
+  @Test
+  public void testPrivateAccessForStaticBlock() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @private */",
+                "  static bar = 2",
+                "  static {",
+                "    this.bar = 4;",
+                "  }",
+                "}")));
+  }
+
+  @Test
+  public void testNoPrivateAccessForStaticBlock() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @private */",
+                "  static bar = 2;",
+                "}"),
+            lines(
+                "class Bar extends Foo{", //
+                "  static {",
+                "    this.bar = 4;",
+                "  }",
+                "}")),
         error(BAD_PRIVATE_PROPERTY_ACCESS));
   }
 
@@ -1712,6 +1917,87 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
                 "goog.NotASubFoo = class {",
                 "  constructor() {",
                 "    (new goog.Foo).bar;",
+                "  }",
+                "}")),
+        error(BAD_PROTECTED_PROPERTY_ACCESS));
+  }
+
+  @Test
+  public void testProtectedAccessForStaticBlocks() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @protected */",
+                "  static bar",
+                "  static {",
+                "    this.bar;",
+                "  }",
+                "}")));
+  }
+
+  @Test
+  public void testProtectedAccessForStaticBlocks_sameFile() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @protected */",
+                "  static bar",
+                "}",
+                "class SubFoo extends Foo {",
+                "  static {",
+                "    this.bar;",
+                "  }",
+                "}")));
+  }
+
+  @Test
+  public void testProtectedAccessForStaticBlocks_sameFile1() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @protected */",
+                "  static bar",
+                "}",
+                "class Bar {",
+                "  static {",
+                "    Foo.bar;",
+                "  }",
+                "}")));
+  }
+
+  @Test
+  public void testProtectedAccessForStatic_differentFile() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @protected */",
+                "  static bar",
+                "}"),
+            lines(
+                "class SubFoo extends Foo {", //
+                "  static {",
+                "    this.bar;",
+                "  }",
+                "}")));
+  }
+
+  @Test
+  public void testNoProtectedAccessForStaticBlocks_differentFile() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @protected */",
+                "  static bar",
+                "}"),
+            lines(
+                "class Bar {", //
+                "  static {",
+                "    Foo.bar;",
                 "  }",
                 "}")),
         error(BAD_PROTECTED_PROPERTY_ACCESS));
@@ -2720,6 +3006,22 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testPublicOverrideOfProtectedProperty() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @protected */",
+                "  bar() {}",
+                "}"),
+            lines(
+                "class SubFoo extends Foo {", //
+                "  /** @public */",
+                "  bar() {}",
+                "}")));
+  }
+
+  @Test
   public void testBadOverrideOfProtectedProperty() {
     test(
         srcs(
@@ -2734,6 +3036,22 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
                 "  bar() {}",
                 "}")),
         error(VISIBILITY_MISMATCH));
+  }
+
+  @Test
+  public void testProtectedOverrideOfPackageProperty() {
+    test(
+        srcs(
+            lines(
+                "class Foo {", //
+                "  /** @package */",
+                "  bar() {}",
+                "}"),
+            lines(
+                "class SubFoo extends Foo {", //
+                "  /** @protected */",
+                "  bar() {}",
+                "}")));
   }
 
   @Test
@@ -3355,6 +3673,21 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testConstantPropertyReassignmentInClassStaticBlock() {
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "/** @const */",
+                "  static x = 2;",
+                "  static {",
+                "    this.x = 3;",
+                "  }",
+                "}")),
+        error(CONST_PROPERTY_REASSIGNED_VALUE));
+  }
+
+  @Test
   public void testFinalClassCannotBeSubclassed() {
     test(
         srcs(
@@ -3377,10 +3710,121 @@ public final class CheckAccessControlsTest extends CompilerTestCase {
     test(
         srcs(
             lines(
+                "/** @final */", //
+                "class Foo {};",
+                "",
+                "class Bar extends Foo { constructor() {} };")),
+        error(EXTEND_FINAL_CLASS));
+
+    test(
+        srcs(
+            lines(
                 "/** @const */", //
                 "var Foo = class {};",
                 "",
                 "var Bar = class extends Foo {};")));
+  }
+
+  @Test
+  public void testFinalAndConstTreatedAsFinal() {
+    test(
+        srcs(
+            lines(
+                "class Foo {}", //
+                "/** @final @const */",
+                "Foo.prop = 0;",
+                "Foo.prop = 1;")),
+        error(FINAL_PROPERTY_OVERRIDDEN));
+  }
+
+  @Test
+  public void testFinalMethodCanBeCalled() {
+    testNoWarning(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "class Bar extends Foo {}",
+                "new Foo().method();",
+                "new Bar().method();")));
+  }
+
+  @Test
+  public void testFinalMethodCannotBeOverridden() {
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "class Bar extends Foo {",
+                "  method() {}",
+                "}")),
+        error(FINAL_PROPERTY_OVERRIDDEN));
+
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "class Bar extends Foo {",
+                "  /** @override */",
+                "  method() {}",
+                "}")),
+        error(FINAL_PROPERTY_OVERRIDDEN));
+
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "class Bar extends Foo {}",
+                "class Baz extends Bar {",
+                "  /** @override */",
+                "  method() {}",
+                "}")),
+        error(FINAL_PROPERTY_OVERRIDDEN));
+
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "Foo.prototype.method = () => '';")),
+        error(FINAL_PROPERTY_OVERRIDDEN));
+  }
+
+  @Test
+  public void testFinalMethodCannotBeDeleted() {
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "delete Foo.prototype.method;")),
+        error(CONST_PROPERTY_DELETED));
+
+    test(
+        srcs(
+            lines(
+                "class Foo {",
+                "  /** @final */",
+                "  method() {}",
+                "}",
+                "class Bar extends Foo {}",
+                "delete Bar.prototype.method;")),
+        error(CONST_PROPERTY_DELETED));
   }
 
   @Test

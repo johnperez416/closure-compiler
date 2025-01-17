@@ -39,11 +39,10 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   }
 
   private boolean preserveGoogProvidesAndRequires;
+  private ProcessClosureProvidesAndRequires lastProcessor;
 
-  private ProcessClosureProvidesAndRequires createClosureProcessor(
-      Compiler compiler, CheckLevel requireCheckLevel) {
-    return new ProcessClosureProvidesAndRequires(
-        compiler, requireCheckLevel, preserveGoogProvidesAndRequires);
+  private ProcessClosureProvidesAndRequires createClosureProcessor(Compiler compiler) {
+    return new ProcessClosureProvidesAndRequires(compiler, preserveGoogProvidesAndRequires);
   }
 
   @Override
@@ -55,15 +54,15 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
     enableTypeCheck();
     enableCreateModuleMap(); // necessary for the typechecker
     replaceTypesWithColors();
+    lastProcessor = null;
   }
 
   @Override
   protected CompilerPass getProcessor(Compiler compiler) {
     return (Node externs, Node root) -> {
-      verifyCollectProvidedNamesDoesntChangeAst(externs, root, CheckLevel.ERROR, compiler);
-      ProcessClosureProvidesAndRequires processor =
-          createClosureProcessor(compiler, CheckLevel.ERROR);
-      processor.rewriteProvidesAndRequires(externs, root);
+      verifyCollectProvidedNamesDoesntChangeAst(externs, root, compiler);
+      lastProcessor = createClosureProcessor(compiler);
+      lastProcessor.rewriteProvidesAndRequires(externs, root);
     };
   }
 
@@ -129,8 +128,7 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
         expected(
             "/** @const */ var foo={}; /** @const */ foo.bar={}; /** @const */ foo.bar.baz={};"));
     test(
-        srcs(
-            "goog.provide('foo.bar.baz.boo');"),
+        srcs("goog.provide('foo.bar.baz.boo');"),
         expected(
             lines(
                 "/** @const */ var foo={};",
@@ -144,14 +142,11 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   @Test
   public void testMultipleProvides() {
     test(
-        srcs(
-            "goog.provide('foo.bar'); goog.provide('foo.baz');"),
-        expected(
-            "/** @const */ var foo={}; /** @const */ foo.bar={}; /** @const */ foo.baz={};"));
+        srcs("goog.provide('foo.bar'); goog.provide('foo.baz');"),
+        expected("/** @const */ var foo={}; /** @const */ foo.bar={}; /** @const */ foo.baz={};"));
 
     test(
-        srcs(
-            "goog.provide('foo.bar.baz'); goog.provide('foo.boo.foo');"),
+        srcs("goog.provide('foo.bar.baz'); goog.provide('foo.boo.foo');"),
         expected(
             lines(
                 "/** @const */",
@@ -166,8 +161,7 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
                 "foo.boo.foo={};")));
 
     test(
-        srcs(
-            "goog.provide('foo.bar.baz'); goog.provide('foo.bar.boo');"),
+        srcs("goog.provide('foo.bar.baz'); goog.provide('foo.bar.boo');"),
         expected(
             lines(
                 "/** @const */",
@@ -180,8 +174,7 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
                 "foo.bar.boo={};")));
 
     test(
-        srcs(
-            "goog.provide('foo.bar.baz'); goog.provide('goog.bar.boo');"),
+        srcs("goog.provide('foo.bar.baz'); goog.provide('goog.bar.boo');"),
         expected(
             lines(
                 "/** @const */",
@@ -194,6 +187,18 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
                 "goog.bar={};",
                 "/** @const */",
                 "goog.bar.boo = {};")));
+  }
+
+  @Test
+  public void testProvideAlreadyProvided() {
+    test(
+        srcs(
+            lines(
+                "goog.provide('a.b')",
+                "/** @provideAlreadyProvided */",
+                "goog.provide('a.b.c')",
+                "a.b = something;")),
+        expected(lines("/** @const */ var a = {};", "a.b = something;")));
   }
 
   @Test
@@ -218,11 +223,8 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
     test(srcs("goog.provide('foo'); var foo = ()=>{};"), expected("var foo = ()=>{};"));
 
     test(
-        srcs(
-
-            "goog.provide('foo.bar.Baz'); foo.bar.Baz=function(){};"),
+        srcs("goog.provide('foo.bar.Baz'); foo.bar.Baz=function(){};"),
         expected(
-
             lines(
                 "/** @const */",
                 "var foo={};",
@@ -230,11 +232,8 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
                 "foo.bar = {};",
                 "foo.bar.Baz=function(){};")));
     test(
-        srcs(
-
-            "goog.provide('foo.bar.moo'); foo.bar.moo={E:1,S:2};"),
+        srcs("goog.provide('foo.bar.moo'); foo.bar.moo={E:1,S:2};"),
         expected(
-
             lines(
                 "/** @const */",
                 "var foo={};",
@@ -243,8 +242,7 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
                 "foo.bar.moo={E:1,S:2};")));
 
     test(
-        srcs(
-            "goog.provide('foo.bar.moo'); foo.bar.moo={E:1}; foo.bar.moo={E:2};"),
+        srcs("goog.provide('foo.bar.moo'); foo.bar.moo={E:1}; foo.bar.moo={E:2};"),
         expected(
             lines(
                 "/** @const */",
@@ -281,10 +279,8 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   @Test
   public void testRemovalMultipleAssignment4() {
     test(
-        srcs(
-            "goog.provide('foo.bar'); foo.bar = 0; foo.bar = 1"),
-        expected(
-            "/** @const */ var foo = {}; foo.bar = 0; foo.bar = 1"));
+        srcs("goog.provide('foo.bar'); foo.bar = 0; foo.bar = 1"),
+        expected("/** @const */ var foo = {}; foo.bar = 0; foo.bar = 1"));
   }
 
   @Test
@@ -297,64 +293,48 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
                 "/** @suppress {checkTypes} */",
                 "  foo = 0;",
                 "}")),
-        expected(
-            lines(
-                "/** @const */ var foo = {};",
-                "function f(){",
-                "  foo = 0;",
-                "}")));
+        expected(lines("/** @const */ var foo = {};", "function f(){", "  foo = 0;", "}")));
   }
 
   @Test
   public void testNoRemovalFunction2() {
     test(
-        srcs(
-            "goog.provide('foo'); function f(){var foo = 0}"),
-        expected(
-            "/** @const */ var foo = {}; function f(){var foo = 0}"));
+        srcs("goog.provide('foo'); function f(){var foo = 0}"),
+        expected("/** @const */ var foo = {}; function f(){var foo = 0}"));
   }
 
   @Test
   public void testNoRemovalFunction3() {
     test(
-        srcs(
-            "goog.provide('foo'); function f(foo = 0){}"),
-        expected(
-            "/** @const */ var foo = {}; function f(foo = 0){}"));
+        srcs("goog.provide('foo'); function f(foo = 0){}"),
+        expected("/** @const */ var foo = {}; function f(foo = 0){}"));
   }
 
   @Test
   public void testRemovalMultipleAssignmentInIf1() {
     test(
-        srcs(
-            "goog.provide('foo'); if (true) { var foo = 0 } else { foo = 1 }"),
-        expected(
-            "if (true) { var foo = 0 } else { foo = 1 }"));
+        srcs("goog.provide('foo'); if (true) { var foo = 0 } else { foo = 1 }"),
+        expected("if (true) { var foo = 0 } else { foo = 1 }"));
   }
 
   @Test
   public void testRemovalMultipleAssignmentInIf2() {
     test(
-        srcs(
-            "goog.provide('foo'); if (true) { foo = 0 } else { var foo = 1 }"),
-        expected(
-            "if (true) { foo = 0 } else { var foo = 1 }"));
+        srcs("goog.provide('foo'); if (true) { foo = 0 } else { var foo = 1 }"),
+        expected("if (true) { foo = 0 } else { var foo = 1 }"));
   }
 
   @Test
   public void testRemovalMultipleAssignmentInIf3() {
     test(
-        srcs(
-            "goog.provide('foo'); if (true) { foo = 0 } else { foo = 1 }"),
-        expected(
-            "if (true) { var foo = 0 } else { foo = 1 }"));
+        srcs("goog.provide('foo'); if (true) { foo = 0 } else { foo = 1 }"),
+        expected("if (true) { var foo = 0 } else { foo = 1 }"));
   }
 
   @Test
   public void testRemovalMultipleAssignmentInIf4() {
     test(
-        srcs(
-            "goog.provide('foo.bar'); if (true) { foo.bar = 0 } else { foo.bar = 1 }"),
+        srcs("goog.provide('foo.bar'); if (true) { foo.bar = 0 } else { foo.bar = 1 }"),
         expected(
             lines(
                 "/** @const */ var foo = {};",
@@ -369,10 +349,8 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   public void testMultipleDeclarationError1() {
     String rest = "if (true) { foo.bar = 0 } else { foo.bar = 1 }";
     test(
-        srcs(
-            "goog.provide('foo.bar');" + "var foo = {};" + rest),
-        expected(
-            "var foo = {};" + "var foo = {};" + rest));
+        srcs("goog.provide('foo.bar');" + "var foo = {};" + rest),
+        expected("var foo = {};" + "var foo = {};" + rest));
   }
 
   @Test
@@ -430,14 +408,11 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   public void testDuplicateProvideDoesntCrash() {
     ignoreWarnings(ClosurePrimitiveErrors.DUPLICATE_NAMESPACE);
     test(
-        srcs(
-            "goog.provide('foo'); goog.provide('foo');"),
-        expected(
-            "/** @const */ var foo = {}; goog.provide('foo');"));
+        srcs("goog.provide('foo'); goog.provide('foo');"),
+        expected("/** @const */ var foo = {}; goog.provide('foo');"));
 
     test(
-        srcs(
-            "goog.provide('foo.bar'); goog.provide('foo'); goog.provide('foo');"),
+        srcs("goog.provide('foo.bar'); goog.provide('foo'); goog.provide('foo');"),
         expected(
             lines(
                 "/** @const */ var foo={};", //
@@ -450,21 +425,15 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
     test(srcs("goog.provide('foo'); goog.require('foo');"), expected("/** @const */ var foo={};"));
 
     test(
-        srcs(
-            "goog.provide('foo.bar'); goog.require('foo.bar');"),
-        expected(
-            "/** @const */ var foo={}; /** @const */ foo.bar={};"));
+        srcs("goog.provide('foo.bar'); goog.require('foo.bar');"),
+        expected("/** @const */ var foo={}; /** @const */ foo.bar={};"));
     test(
-        srcs(
-            "goog.provide('foo.bar.baz'); goog.require('foo.bar.baz');"),
+        srcs("goog.provide('foo.bar.baz'); goog.require('foo.bar.baz');"),
         expected(
-
             "/** @const */ var foo={}; /** @const */ foo.bar={}; /** @const */ foo.bar.baz={};"));
     test(
-        srcs(
-            "goog.provide('foo'); var x = 3; goog.require('foo'); something();"),
-        expected(
-            "/** @const */ var foo={}; var x = 3; something();"));
+        srcs("goog.provide('foo'); var x = 3; goog.require('foo'); something();"),
+        expected("/** @const */ var foo={}; var x = 3; something();"));
     testSame("foo.require('foo.bar');");
   }
 
@@ -474,20 +443,15 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
         srcs("goog.provide('foo'); goog.requireType('foo');"),
         expected("/** @const */ var foo={};"));
     test(
-        srcs(
-            "goog.provide('foo.bar'); goog.requireType('foo.bar');"),
-        expected(
-            "/** @const */ var foo={}; /** @const */ foo.bar={};"));
+        srcs("goog.provide('foo.bar'); goog.requireType('foo.bar');"),
+        expected("/** @const */ var foo={}; /** @const */ foo.bar={};"));
     test(
-        srcs(
-            "goog.provide('foo.bar.baz'); goog.requireType('foo.bar.baz');"),
+        srcs("goog.provide('foo.bar.baz'); goog.requireType('foo.bar.baz');"),
         expected(
             "/** @const */ var foo={}; /** @const */ foo.bar={}; /** @const */ foo.bar.baz={};"));
     test(
-        srcs(
-            "goog.provide('foo'); var x = 3; goog.requireType('foo'); something();"),
-        expected(
-            "/** @const */ var foo={}; var x = 3; something();"));
+        srcs("goog.provide('foo'); var x = 3; goog.requireType('foo'); something();"),
+        expected("/** @const */ var foo={}; var x = 3; something();"));
     testSame("foo.requireType('foo.bar');");
   }
 
@@ -495,13 +459,10 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   public void testPreserveGoogRequire() {
     preserveGoogProvidesAndRequires = true;
     test(
-        srcs(
-            "goog.provide('foo'); goog.require('foo');"),
-        expected(
-            "/** @const */ var foo={}; goog.provide('foo'); goog.require('foo');"));
+        srcs("goog.provide('foo'); goog.require('foo');"),
+        expected("/** @const */ var foo={}; goog.provide('foo'); goog.require('foo');"));
     test(
-        srcs(
-            "goog.provide('foo'); goog.require('foo'); var a = {};"),
+        srcs("goog.provide('foo'); goog.require('foo'); var a = {};"),
         expected(
             "/** @const */ var foo = {}; goog.provide('foo'); goog.require('foo'); var a = {};"));
   }
@@ -511,13 +472,10 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
     preserveGoogProvidesAndRequires = true;
 
     test(
-        srcs(
-            "goog.provide('foo'); goog.requireType('foo');"),
-        expected(
-            "/** @const */ var foo={}; goog.provide('foo'); goog.requireType('foo');"));
+        srcs("goog.provide('foo'); goog.requireType('foo');"),
+        expected("/** @const */ var foo={}; goog.provide('foo'); goog.requireType('foo');"));
     test(
-        srcs(
-            "goog.provide('foo'); goog.requireType('foo'); var a = {};"),
+        srcs("goog.provide('foo'); goog.requireType('foo'); var a = {};"),
         expected(
             "/** @const */ var foo = {}; goog.provide('foo'); goog.requireType('foo'); var a ="
                 + " {};"));
@@ -711,31 +669,21 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
   @Test
   public void testInvalidRequireScope() {
     test(
-        srcs(
-            "goog.provide('a.b'); var x = x || goog.require('a.b');"),
-        expected(
-            "/** @const */ var a={};/** @const */ a.b={};var x=x||goog.require(\"a.b\")"));
+        srcs("goog.provide('a.b'); var x = x || goog.require('a.b');"),
+        expected("/** @const */ var a={};/** @const */ a.b={};var x=x||goog.require(\"a.b\")"));
     test(
-        srcs(
-            "goog.provide('a.b'); x = goog.require('a.b');"),
-        expected(
-            "/** @const */ var a={};/** @const */ a.b={}; x= goog.require(\"a.b\")"));
+        srcs("goog.provide('a.b'); x = goog.require('a.b');"),
+        expected("/** @const */ var a={};/** @const */ a.b={}; x= goog.require(\"a.b\")"));
     test(
-        srcs(
-            "goog.provide('a.b'); function f() { goog.require('a.b'); }"),
-        expected(
-            "/** @const */ var a={};/** @const */ a.b={};function f(){goog.require('a.b')}"));
+        srcs("goog.provide('a.b'); function f() { goog.require('a.b'); }"),
+        expected("/** @const */ var a={};/** @const */ a.b={};function f(){goog.require('a.b')}"));
   }
 
   @Test
   public void testImplicitAndExplicitProvide() {
     test(
-        srcs(
-
-            "goog.provide('goog.foo.bar'); goog.provide('goog.foo');"),
-        expected(
-
-            lines("/** @const */", "goog.foo = {};", "/** @const */", "goog.foo.bar = {};")));
+        srcs("goog.provide('goog.foo.bar'); goog.provide('goog.foo');"),
+        expected(lines("/** @const */", "goog.foo = {};", "/** @const */", "goog.foo.bar = {};")));
   }
 
   @Test
@@ -992,10 +940,23 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
     assertThat(providedNameMap.keySet()).containsExactly("goog");
   }
 
+  @Test
+  public void testGoogExportSymbolRecording() {
+    testSame(
+        """
+            goog.exportSymbol('a', 0);
+            goog.exportSymbol('foo.bar.baz', 1);
+            goog.exportSymbol(notAStringLiteral, 2);
+            function f() {
+              goog.exportSymbol('b', 3);
+            }
+        """);
+    assertThat(lastProcessor.getExportedVariableNames()).containsExactly("a", "foo", "b");
+  }
+
   private Map<String, ProvidedName> getProvidedNameCollection(String js) {
     Compiler compiler = createCompiler();
-    ProcessClosureProvidesAndRequires processor =
-        createClosureProcessor(compiler, CheckLevel.ERROR);
+    ProcessClosureProvidesAndRequires processor = createClosureProcessor(compiler);
     Node jsRoot = compiler.parseTestCode(js);
     Node scopeRoot = IR.root(IR.root(), IR.root(jsRoot));
     Map<String, ProvidedName> providedNameMap =
@@ -1013,12 +974,11 @@ public class ProcessClosureProvidesAndRequiresTest extends CompilerTestCase {
    * goog.provides but preserve the original AST structure for future checks.
    */
   private void verifyCollectProvidedNamesDoesntChangeAst(
-      Node externs, Node root, CheckLevel requireCheckLevel, Compiler compiler) {
+      Node externs, Node root, Compiler compiler) {
     // Validate that this does not modify the AST at all!
     Node originalExterns = externs.cloneTree();
     Node originalRoot = root.cloneTree();
-    ProcessClosureProvidesAndRequires processor =
-        createClosureProcessor(compiler, requireCheckLevel);
+    ProcessClosureProvidesAndRequires processor = createClosureProcessor(compiler);
     processor.collectProvidedNames(externs, root);
 
     assertNode(externs).isEqualIncludingJsDocTo(originalExterns);

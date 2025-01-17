@@ -1,5 +1,6 @@
 # [Google Closure Compiler](https://developers.google.com/closure/compiler/)
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/google/closure-compiler/badge)](https://api.securityscorecards.dev/projects/github.com/google/closure-compiler)
 [![Build Status](https://github.com/google/closure-compiler/workflows/Compiler%20CI/badge.svg)](https://github.com/google/closure-compiler/actions)
 [![Open Source Helpers](https://www.codetriage.com/google/closure-compiler/badges/users.svg)](https://www.codetriage.com/google/closure-compiler)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg)](https://github.com/google/closure-compiler/blob/master/code_of_conduct.md)
@@ -12,7 +13,139 @@ analyzes it, removes dead code and rewrites and minimizes what's left. It also
 checks syntax, variable references, and types, and warns about common JavaScript
 pitfalls.
 
+## Important Caveats
+
+1. Compilation modes other than `ADVANCED` were always an afterthought and we
+   have deprecated those modes. We believe that other tools perform comparably
+   for non-`ADVANCED` modes and are better integrated into the broader JS
+   ecosystem.
+
+1. Closure Compiler is not suitable for arbitrary JavaScript.  For `ADVANCED`
+   mode to generate working JavaScript, the input JS code must be written with
+   closure-compiler in mind.
+
+1. Closure Compiler is a "whole world" optimizer. It expects to directly see or
+   at least receive information about every possible use of every global or
+   exported variable and every property name.
+
+   It will aggressively remove and rename variables and properties in order to
+   make the output code as small as possible. This will result in broken output
+   JS, if uses of global variables or properties are hidden from it.
+
+    Although one can write custom externs files to tell the compiler to leave
+    some names unchanged so they can safely be accessed by code that is not part
+    of the compilation, this is often tedious to maintain.
+
+1. Closure Compiler property renaming requires you to consistently access a
+   property with either `obj[p]` or `obj.propName`, but not both.
+
+   When you access a property with square brackets (e.g. `obj[p]`) or using some
+   other indirect method like `let {p} = obj;` this hides the literal name of
+   the property being referenced from the compiler. It cannot know if
+   `obj.propName` is referring to the same property as `obj[p]`. In some cases
+   it will notice this problem and stop the compilation with an error. In other
+   cases it will rename `propName` to something shorter, without noticing this
+   problem, resulting in broken output JS code.
+
+1. Closure Compiler aggressively inlines global variables and flattens chains
+   of property names on global variables (e.g. `myFoo.some.sub.property` ->
+   `myFoo$some$sub$property`), to make reasoning about them easier for detecting
+   unused code.
+
+   It tries to either back off from doing this or halt with an error when
+   doing it will generate broken JS output, but there are cases where it will
+   fail to recognize the problem and simply generate broken JS without warning.
+   This is much more likely to happen in code that was not explicitly written
+   with Closure Compiler in mind.
+
+1. Closure compiler and the externs it uses by default assume that the target
+   environment is a web browser window.
+
+   WebWorkers are supported also, but the compiler will likely fail to warn
+   you if you try to use features that aren't actually available to a WebWorker.
+
+   Some externs files and features have been added to Closure Compiler to
+   support the NodeJS environment, but they are not actively supported and
+   never worked very well.
+
+1. JavaScript that does not use the `goog.module()` and `goog.require()` from
+   `base.js` to declare and use modules is not well supported.
+
+    The ECMAScript `import` and `export` syntax did not exist until 2015.
+    Closure compiler and `closure-library` developed their own means for
+    declaring and using modules, and this remains the only well supported
+    way of defining modules.
+
+    The compiler does implement some understanding of ECMAScript modules,
+    but changing Google's projects to use the newer syntax has never offered
+    a benefit that was worth the cost of the change. Google's TypeScript code
+    uses ECMAScript modules, but they are converted to `goog.module()` syntax
+    before closure-compiler sees them. So, effectively the ECMAScript modules
+    support is unused within Google. This means we are unlikely to notice
+    or fix bugs in the support for ECMAScript modules.
+
+    Support for CommonJS modules as input was added in the past, but is not
+    used within Google, and is likely to be entirely removed sometime in 2024.
+
+## Supported uses
+
+Closure Compiler is used by Google projects to:
+
+*   Drastically reduce the code size of very large JavaScript applications
+
+*   Check the JS code for errors and for conformance to general and/or
+    project-specific best practices.
+
+*   Define user-visible messages in a way that makes it possible to replace
+    them with translated versions to create localized versions of an
+    application.
+
+*   Transpile newer JS features into a form that will run on browsers that
+    lack support for those features.
+
+*   Break the output application into chunks that may be individually loaded
+    as needed.
+
+    NOTE: These chunks are plain JavaScript scripts. They do not use the
+    ECMAScript `import` and `export` syntax.
+
+To achieve these goals closure compiler places many restrictions on its input:
+
+*   Use `goog.module()` and `goog.require()` to declare and use modules.
+
+    Support for the `import` and `export` syntax added in ES6 is not actively
+    maintained.
+
+*   Use annotations in comments to declare type information and provide
+    information the compiler needs to avoid breaking some code patterns
+    (e.g. `@nocollapse` and `@noinline`).
+
+*   Either use only dot-access (e.g. `object.property`) or only use dynamic
+    access (e.g. `object[propertyName]` or `Object.keys(object)`) to access
+    the properties of a particular object type.
+
+    Mixing these will hide some uses of a property from the compiler, resulting
+    in broken output code when it renames the property.
+
+*   In general the compiler expects to see an entire application as a single
+    compilation. Interfaces must be carefully and explicitly constructed in
+    order to allow interoperation with code outside of the compilation unit.
+
+    The compiler assumes it can see all uses of all variables and properties
+    and will freely rename them or remove them if they appear unused.
+
+*   Use externs files to inform the compiler of any variables or properties
+    that it must not remove or rename.
+
+    There are default externs files declaring the standard JS and DOM global
+    APIs. More externs files are necessary if you are using less common
+    APIs or expect some external JavaScript code to access an API in the
+    code you are compiling.
+
 ## Getting Started
+
+NOTE: NPM releases were put on hold in early 2024 and are not likely to resume
+until early 2025.
 
 The easiest way to install the compiler is with [NPM](https://npmjs.com) or
 [Yarn](https://yarnpkg.com):
@@ -46,6 +179,9 @@ var x=42;
 
 #### Downloading from Maven Repository
 
+NOTE: Maven releases were put on hold in early 2024 and are not likely to resume
+until early 2025.
+
 A pre-compiled release of the compiler is also available via
 [Maven](https://mvnrepository.com/artifact/com.google.javascript/closure-compiler).
 
@@ -66,6 +202,10 @@ allows us to use `ADVANCED` optimizations:
 ```bash
 google-closure-compiler -O ADVANCED rollup.js --js_output_file rollup.min.js
 ```
+
+NOTE: The output below is just an example and not kept up-to-date. The
+  [Flags and Options wiki page](https://github.com/google/closure-compiler/wiki/Flags-and-Options)
+  is updated during each release.
 
 To see all of the compiler's options, type:
 
@@ -195,9 +335,21 @@ the command line.
 
 If you're using globs or many files, you may start to run into problems with
 managing dependencies between scripts. In this case, you should use the
-[Closure Library](https://developers.google.com/closure/library/). It contains
-functions for enforcing dependencies between scripts, and Closure Compiler will
-re-order the inputs automatically.
+included [lib/base.js](lib/base.js) that provides functions for enforcing
+dependencies between scripts (namely `goog.module` and `goog.require`). Closure
+Compiler will re-order the inputs automatically.
+
+## Closure JavaScript Library
+
+The Closure Compiler releases with [lib/base.js](lib/base.js) that provides
+JavaScript functions and variables that serve as primitives enabling certain
+features of the Closure Compiler. This file is a derivative of the
+[identically named base.js](https://github.com/google/closure-library/blob/7818ff7dc0b53555a7fb3c3427e6761e88bde3a2/closure/goog/base.js)
+in the
+[soon-to-be deprecated](https://github.com/google/closure-library/issues/1214)
+Closure Library. This `base.js` will be supported by Closure Compiler going
+forward and may receive new features. It was designed to only retain its
+perceived core parts.
 
 ## Getting Help
 
@@ -213,9 +365,10 @@ To build the compiler yourself, you will need the following:
 
 Prerequisite                                                               | Description
 -------------------------------------------------------------------------- | -----------
-[Java 8 or later](https://java.com)                                        | Used to compile the compiler's source code.
+[Java 21 or later](https://java.com)                                       | Used to compile the compiler's source code.
+[NodeJS](https://nodejs.org)                                               | Used to generate resources used by Java compilation
 [Git](https://git-scm.com/)                                                | Used by Bazel to download dependencies.
-[Bazelisk](https://docs.bazel.build/versions/master/install-bazelisk.html) | Used to build the various compiler targets.
+[Bazelisk](https://bazel.build/install/bazelisk) | Used to build the various compiler targets.
 
 ### Installing Bazelisk
 
@@ -227,19 +380,14 @@ makes it easy to use different Bazel versions for other projects.
 Bazelisk is available through many package managers. Feel free to use whichever
 you're most comfortable with.
 
-[Instructions for installing Bazelisk](https://docs.bazel.build/versions/master/install-bazelisk.html).
+[Instructions for installing Bazelisk](https://bazel.build/install/bazelisk).
 
 ### Building from a terminal
 
-You can trigger the build process easily with package.json scripts or by calling
-Bazel manually.
-
 ```bash
-# bazelisk build //:compiler_unshaded_deploy.jar
-yarn build
-
-# bazelisk build :all
-yarn build:all
+$ bazelisk build //:compiler_uberjar_deploy.jar
+# OR to build everything
+$ bazelisk build //:all
 ```
 
 ### Testing from a terminal
@@ -248,7 +396,7 @@ Tests can be executed in a similar way. The following command will run all tests
 in the repo.
 
 ```bash
-# bazelisk test //:all
+$ bazelisk test //:all
 ```
 
 There are hundreds of individual test targets, so it will take a few
@@ -270,7 +418,7 @@ directory. You can access it with a call to `java -jar ...` or by using the
 package.json script:
 
 ```bash
-# java -jar bazel-bin/compiler_unshaded_deploy.jar [...args]
+# java -jar bazel-bin/compiler_uberjar_deploy.jar [...args]
 yarn compile [...args]
 ```
 
@@ -442,7 +590,7 @@ options/arguments in your CUI application.</td>
 
   <tr>
     <td>Version</td>
-    <td>20.0</td>
+    <td>31.0.1</td>
   </tr>
 
   <tr>
@@ -500,7 +648,7 @@ options/arguments in your CUI application.</td>
 
   <tr>
     <td>Version</td>
-    <td>4.12</td>
+    <td>4.13</td>
   </tr>
 
   <tr>
@@ -617,7 +765,7 @@ an encoding of structured data.</td>
 
   <tr>
     <td>Version</td>
-    <td>1.9.7</td>
+    <td>1.10.11</td>
   </tr>
 
   <tr>
@@ -647,7 +795,7 @@ without make's wrinkles and with the full portability of pure java code.</td>
 
   <tr>
     <td>Version</td>
-    <td>2.7</td>
+    <td>2.9.1</td>
   </tr>
 
   <tr>

@@ -16,18 +16,17 @@
 
 package com.google.javascript.jscomp.bundle;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.ErrorFormat;
 import com.google.javascript.jscomp.JSError;
 import com.google.javascript.jscomp.MessageFormatter;
 import com.google.javascript.jscomp.SourceExcerptProvider;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An unchecked exception thrown when transpilation fails due to one or
  * more errors in the input script.
  */
-@GwtIncompatible
 public class TranspilationException extends RuntimeException {
 
   private final ImmutableList<JSError> errors;
@@ -41,11 +40,7 @@ public class TranspilationException extends RuntimeException {
       SourceExcerptProvider source,
       ImmutableList<JSError> errors,
       ImmutableList<JSError> warnings) {
-    this(
-        ImmutableList.copyOf(errors),
-        ImmutableList.copyOf(warnings),
-        format(source, errors, warnings),
-        null);
+    this(errors, warnings, format(source, errors, warnings), null);
   }
 
   private TranspilationException(TranspilationException root, Exception cause) {
@@ -56,7 +51,7 @@ public class TranspilationException extends RuntimeException {
       ImmutableList<JSError> errors,
       ImmutableList<JSError> warnings,
       String formatted,
-      Exception cause) {
+      @Nullable Exception cause) {
     super(formatted, cause);
     this.errors = errors;
     this.warnings = warnings;
@@ -88,9 +83,9 @@ public class TranspilationException extends RuntimeException {
     return sb.toString();
   }
 
-  private static TranspilationException tryCastToTranspilationException(Throwable t) {
-    if (t instanceof TranspilationException) {
-      return (TranspilationException) t;
+  private static @Nullable TranspilationException tryCastToTranspilationException(Throwable t) {
+    if (t instanceof TranspilationException transpilationException) {
+      return transpilationException;
     }
     return null;
   }

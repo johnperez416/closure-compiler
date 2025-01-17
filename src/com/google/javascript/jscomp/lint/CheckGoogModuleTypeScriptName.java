@@ -22,7 +22,7 @@ import com.google.javascript.jscomp.DiagnosticType;
 import com.google.javascript.jscomp.NodeTraversal;
 import com.google.javascript.jscomp.NodeUtil;
 import com.google.javascript.rhino.Node;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
@@ -32,11 +32,11 @@ import java.util.Set;
 public final class CheckGoogModuleTypeScriptName implements NodeTraversal.Callback, CompilerPass {
   public static final DiagnosticType MODULE_NAMESPACE_MISMATCHES_TYPESCRIPT_NAMESPACE =
       DiagnosticType.disabled(
-          "MODULE_NAMESPACE_MISMATCHES_TYPESCRIPT_NAMESPACE",
+          "JSC_MODULE_NAMESPACE_MISMATCHES_TYPESCRIPT_NAMESPACE",
           "goog.module namespace does not match the future TypeScript namespace, which is generated"
               + " from the file path."
               + " The correct namespace is: \"{0}\"");
-  private static final Set<String> allowedDirectories = new HashSet<>();
+  private static final Set<String> allowedDirectories = new LinkedHashSet<>();
 
   // MOE::begin_strip
   static {
@@ -44,6 +44,7 @@ public final class CheckGoogModuleTypeScriptName implements NodeTraversal.Callba
     allowedDirectories.add("google3/java/com/google/gws/");
     allowedDirectories.add("google3/javascript/search/");
   }
+
   // MOE::end_strip
 
   private final AbstractCompiler compiler;

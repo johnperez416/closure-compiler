@@ -18,7 +18,6 @@ package com.google.javascript.jscomp.instrumentation;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableMap;
 import com.google.debugging.sourcemap.Base64VLQ;
 import com.google.gson.Gson;
@@ -33,7 +32,6 @@ import com.google.javascript.rhino.Node;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -46,7 +44,6 @@ import java.util.Objects;
  * it can be run on client browsers with the goal of better detecting dead code. The callback will
  * instrument by pushing a string onto an array which identifies what piece of code was executed.
  */
-@GwtIncompatible
 final class ProductionCoverageInstrumentationCallback implements NodeTraversal.Callback {
 
   /**
@@ -138,7 +135,8 @@ final class ProductionCoverageInstrumentationCallback implements NodeTraversal.C
         break;
       case SWITCH:
         boolean hasDefaultCase = false;
-        for (Node c = node.getSecondChild(); c != null; c = c.getNext()) {
+        Node switchBody = node.getSecondChild();
+        for (Node c = switchBody.getFirstChild(); c != null; c = c.getNext()) {
           if (c.isDefaultCase()) {
             instrumentBlockNode(
                 c.getLastChild(), sourceFileName, functionName, Type.BRANCH_DEFAULT);
@@ -151,7 +149,7 @@ final class ProductionCoverageInstrumentationCallback implements NodeTraversal.C
           Node defaultBlock = IR.block();
           defaultBlock.srcrefTreeIfMissing(node);
           Node defaultCase = IR.defaultCase(defaultBlock).srcrefTreeIfMissing(node);
-          node.addChildToBack(defaultCase);
+          switchBody.addChildToBack(defaultCase);
           instrumentBlockNode(defaultBlock, sourceFileName, functionName, Type.BRANCH_DEFAULT);
         }
         break;
@@ -286,7 +284,7 @@ final class ProductionCoverageInstrumentationCallback implements NodeTraversal.C
     ParameterMapping() {
       nextUniqueIdentifier = 0;
 
-      paramValueEncodings = new HashMap<>();
+      paramValueEncodings = new LinkedHashMap<>();
 
       // A LinkedHashMap is used so that when keys are printed, keySet() will obtain them in the
       // insertion order which corroborates to the index. This helps to avoid the need of sorting

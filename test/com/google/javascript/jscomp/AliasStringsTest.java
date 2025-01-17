@@ -16,7 +16,9 @@
 
 package com.google.javascript.jscomp;
 
+import com.google.javascript.jscomp.CompilerOptions.AliasStringsMode;
 import com.google.javascript.jscomp.testing.JSChunkGraphBuilder;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -29,17 +31,27 @@ public final class AliasStringsTest extends CompilerTestCase {
 
   private boolean hashReduction = false;
 
+  private AliasStringsMode aliasStringsMode = AliasStringsMode.ALL;
+
   public AliasStringsTest() {
     super(EXTERNS);
   }
 
   @Override
   protected CompilerPass getProcessor(Compiler compiler) {
-    AliasStrings pass = new AliasStrings(compiler, compiler.getModuleGraph(), false);
+    AliasStrings pass =
+        new AliasStrings(compiler, compiler.getChunkGraph(), false, aliasStringsMode);
     if (hashReduction) {
       pass.unitTestHashReductionMask = 0;
     }
     return pass;
+  }
+
+  @Override
+  @Before
+  public void setUp() throws Exception {
+    super.setUp();
+    aliasStringsMode = AliasStringsMode.ALL;
   }
 
   @Test
@@ -55,6 +67,18 @@ public final class AliasStringsTest extends CompilerTestCase {
             "const A = $$S_aliasable$20string;",
             "const B = $$S_aliasable$20string;",
             "const AB = `${A}aliasable string${B}`"));
+  }
+
+  @Test
+  public void testAliasAggressively() {
+    testSame(lines("function f() { return 'aliasable string'; }"));
+
+    aliasStringsMode = AliasStringsMode.ALL_AGGRESSIVE;
+    test(
+        lines("function f() { return 'aliasable string'; }"),
+        lines(
+            "var $$S_aliasable$20string = 'aliasable string';",
+            "function f() { return $$S_aliasable$20string; }"));
   }
 
   @Test
@@ -162,11 +186,11 @@ public final class AliasStringsTest extends CompilerTestCase {
   @Test
   public void testStringsInModules() {
 
-    // Aliases must be placed in the correct module. The alias for
+    // Aliases must be placed in the correct chunk. The alias for
     // '------adios------' must be lifted from m2 and m3 and go in the
-    // common parent module m1
+    // common parent chunks m1
 
-    JSChunk[] modules =
+    JSChunk[] chunks =
         JSChunkGraphBuilder.forBush()
             .addChunk(
                 "function f(a) { alert('ffffffffffffffffffff' + 'ffffffffffffffffffff' + a); }"
@@ -184,7 +208,7 @@ public final class AliasStringsTest extends CompilerTestCase {
             .build();
 
     test(
-        srcs(modules),
+        srcs(chunks),
         expected(
             // m1
             "var $$S_ciaociaociaociaociao = 'ciaociaociaociaociao';"
@@ -226,7 +250,7 @@ public final class AliasStringsTest extends CompilerTestCase {
     // '------adios------' must be lifted from m2 and m3 and go in the
     // common parent module m1
 
-    JSChunk[] modules =
+    JSChunk[] chunks =
         JSChunkGraphBuilder.forBush()
             .addChunk("function g() { alert('ciaociaociaociaociao'); }")
             .addChunk(
@@ -239,7 +263,7 @@ public final class AliasStringsTest extends CompilerTestCase {
             .build();
 
     test(
-        srcs(modules),
+        srcs(chunks),
         expected(
             // m1
             lines(
@@ -261,7 +285,7 @@ public final class AliasStringsTest extends CompilerTestCase {
   @Test
   public void testAliasInCommonModuleInclusive() {
 
-    JSChunk[] modules =
+    JSChunk[] chunks =
         JSChunkGraphBuilder.forBush()
             .addChunk("")
             .addChunk("function g() { alert('ciaociaociaociaociao'); }")
@@ -272,7 +296,7 @@ public final class AliasStringsTest extends CompilerTestCase {
     // The "ciao" string is used in m1 and m2.
     // Since m2 depends on m1, we should create the module there and not force it into m0.
     test(
-        srcs(modules),
+        srcs(chunks),
         expected(
             // m0
             "",
@@ -288,7 +312,7 @@ public final class AliasStringsTest extends CompilerTestCase {
 
   @Test
   public void testEmptyModules() {
-    JSChunk[] modules =
+    JSChunk[] chunks =
         JSChunkGraphBuilder.forStar()
             .addChunk("")
             .addChunk("function foo() { f('goodgoodgoodgoodgood') }")
@@ -296,7 +320,7 @@ public final class AliasStringsTest extends CompilerTestCase {
             .build();
 
     test(
-        srcs(modules),
+        srcs(chunks),
         expected(
             // m0
             "var $$S_goodgoodgoodgoodgood='goodgoodgoodgoodgood'",
@@ -304,5 +328,27 @@ public final class AliasStringsTest extends CompilerTestCase {
             "function foo() {f($$S_goodgoodgoodgoodgood)}",
             // m2
             "function foo() {f($$S_goodgoodgoodgoodgood)}"));
+  }
+
+  @Test
+  public void testOnlyAliasLargeStrings() {
+    aliasStringsMode = AliasStringsMode.LARGE;
+
+    test(
+        lines(
+            "const A = 'non aliasable string with length <= 100 characters';",
+            "const B = 'non aliasable string with length <= 100 characters';",
+            // C and D have lengths of 101 characters
+            "const C = 'aliasable large string"
+                + " largestringlargestringlargestringlargestringlargestringlargestringlargestring!';",
+            "const D = 'aliasable large string"
+                + " largestringlargestringlargestringlargestringlargestringlargestringlargestring!';"),
+        lines(
+            "var $$S_aliasable$20large$20stri_6c7cf169 = 'aliasable large string"
+                + " largestringlargestringlargestringlargestringlargestringlargestringlargestring!';",
+            "const A = 'non aliasable string with length <= 100 characters';",
+            "const B = 'non aliasable string with length <= 100 characters';",
+            "const C = $$S_aliasable$20large$20stri_6c7cf169;",
+            "const D = $$S_aliasable$20large$20stri_6c7cf169;"));
   }
 }

@@ -36,7 +36,7 @@ public final class LazyParsedDependencyInfoTest {
     Require baz = Require.googRequireSymbol("baz");
     Require qux = Require.googRequireSymbol("qux");
     Compiler compiler = new Compiler();
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "// nothing here"));
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "// nothing here"));
     SimpleDependencyInfo delegate =
         SimpleDependencyInfo.builder("path/to/1.js", "path/2.js")
             .setProvides("foo", "bar")
@@ -54,11 +54,9 @@ public final class LazyParsedDependencyInfoTest {
   public void testLoadFlagsParsesEs3() {
     Compiler compiler = new Compiler();
     compiler.initOptions(new CompilerOptions());
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "// nothing here"));
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "// nothing here"));
     SimpleDependencyInfo delegate =
-        SimpleDependencyInfo.builder("", "")
-            .setLoadFlags(ImmutableMap.of("foo", "bar"))
-            .build();
+        SimpleDependencyInfo.builder("", "").setLoadFlags(ImmutableMap.of("foo", "bar")).build();
     DependencyInfo info = new LazyParsedDependencyInfo(delegate, ast, compiler);
 
     // TODO(sdh): We're currently stuck on an earlier version of Truth that doesn't
@@ -67,14 +65,14 @@ public final class LazyParsedDependencyInfoTest {
     // is lifted and we can depend on a newer Truth, these assertions should be
     // changed to assertThat(info.getLoadFlags()).containsExactly(...)
     assertThat(info.getLoadFlags()).containsExactly("foo", "bar");
-    assertThat(info.isModule()).isFalse();
+    assertThat(info.isGoogModule()).isFalse();
   }
 
   @Test
   public void testLoadFlagsParsesEs5() {
     Compiler compiler = new Compiler();
     compiler.initOptions(new CompilerOptions());
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "var x = [1, 2,];"));
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "var x = [1, 2,];"));
     SimpleDependencyInfo delegate =
         SimpleDependencyInfo.builder("", "")
             .setLoadFlags(ImmutableMap.of("module", "goog"))
@@ -82,46 +80,41 @@ public final class LazyParsedDependencyInfoTest {
     DependencyInfo info = new LazyParsedDependencyInfo(delegate, ast, compiler);
 
     assertThat(info.getLoadFlags()).containsExactly("module", "goog", "lang", "es5");
-    assertThat(info.isModule()).isTrue();
+    assertThat(info.isGoogModule()).isTrue();
   }
 
   @Test
   public void testLoadFlagsParsesEs6Impl() {
     Compiler compiler = new Compiler();
     compiler.initOptions(new CompilerOptions());
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "class X {}"));
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "class X {}"));
     SimpleDependencyInfo delegate =
-        SimpleDependencyInfo.builder("", "")
-            .setLoadFlags(ImmutableMap.of("foo", "bar"))
-            .build();
+        SimpleDependencyInfo.builder("", "").setLoadFlags(ImmutableMap.of("foo", "bar")).build();
     DependencyInfo info = new LazyParsedDependencyInfo(delegate, ast, compiler);
 
     assertThat(info.getLoadFlags()).containsExactly("foo", "bar", "lang", "es6");
-    assertThat(info.isModule()).isFalse();
+    assertThat(info.isGoogModule()).isFalse();
   }
 
   @Test
   public void testLoadFlagsParsesEs6() {
     Compiler compiler = new Compiler();
     compiler.initOptions(new CompilerOptions());
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "let [a, b] = [1, 2];"));
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "let [a, b] = [1, 2];"));
     SimpleDependencyInfo delegate =
-        SimpleDependencyInfo.builder("", "")
-            .setLoadFlags(ImmutableMap.of("foo", "bar"))
-            .build();
+        SimpleDependencyInfo.builder("", "").setLoadFlags(ImmutableMap.of("foo", "bar")).build();
     DependencyInfo info = new LazyParsedDependencyInfo(delegate, ast, compiler);
 
     assertThat(info.getLoadFlags()).containsExactly("foo", "bar", "lang", "es6");
-    assertThat(info.isModule()).isFalse();
+    assertThat(info.isGoogModule()).isFalse();
   }
 
   @Test
   public void testParseIsLazy() {
     Compiler compiler = new Compiler();
     compiler.initOptions(new CompilerOptions());
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "parse error"));
-    SimpleDependencyInfo delegate =
-        SimpleDependencyInfo.builder("", "").build();
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "parse error"));
+    SimpleDependencyInfo delegate = SimpleDependencyInfo.builder("", "").build();
     DependencyInfo info = new LazyParsedDependencyInfo(delegate, ast, compiler);
 
     info.getName();
@@ -139,7 +132,7 @@ public final class LazyParsedDependencyInfoTest {
     Compiler compiler = new Compiler();
     CompilerOptions options = new CompilerOptions();
     compiler.initOptions(options);
-    JsAst ast = new JsAst(SourceFile.fromCode("file.js", "export let foo = 42;"));
+    CompilerInput ast = new CompilerInput(SourceFile.fromCode("file.js", "export let foo = 42;"));
     SimpleDependencyInfo delegate =
         SimpleDependencyInfo.builder("", "my/js.js")
             .setLoadFlags(ImmutableMap.of("module", "goog"))
@@ -148,6 +141,7 @@ public final class LazyParsedDependencyInfoTest {
 
     assertThat(compiler.getErrorManager().getWarnings()).isEmpty();
     assertThat(info.getLoadFlags()).containsExactly("module", "es6", "lang", "es6");
+    assertThat(info.isEs6Module()).isFalse();
     assertThat(compiler.getErrorManager().getWarnings())
         .containsExactly(
             JSError.make(

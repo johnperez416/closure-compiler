@@ -20,6 +20,7 @@ import static java.util.Comparator.comparing;
 
 import com.google.javascript.jscomp.CheckLevel;
 import com.google.javascript.jscomp.CompilerOptions;
+import com.google.javascript.jscomp.CompilerOptions.AliasStringsMode;
 import com.google.javascript.jscomp.CompilerOptions.PropertyCollapseLevel;
 import com.google.javascript.jscomp.CompilerOptions.Reach;
 import com.google.javascript.jscomp.DiagnosticGroup;
@@ -122,19 +123,6 @@ public enum CompilationParam {
     @Override
     public String getJavaInfo() {
       return diagGroupWarningInfo("CHECKS_ONLY");
-    }
-  },
-
-  /** Skip the RemoveTypes pass. May cause unexpected changes in optimization output */
-  PRESERVE_TYPES_FOR_DEBUGGING(ParamGroup.ERROR_CHECKING) {
-    @Override
-    public void apply(CompilerOptions options, boolean value) {
-      options.setShouldUnsafelyPreserveTypesForDebugging(value);
-    }
-
-    @Override
-    public String getJavaInfo() {
-      return "options.setShouldUnsafelyPreserveTypesForDebugging(true);";
     }
   },
 
@@ -375,18 +363,18 @@ public enum CompilationParam {
   },
 
   /**
-   * Aliases all string literals to global instances, to avoid creating more objects than necessary
-   * (if true, overrides any set of strings passed in to aliasableStrings)
+   * Aliases all string literals to global instances, to reduce code size (if true, overrides any
+   * set of strings passed in to aliasableStrings)
    */
   ALIAS_ALL_STRINGS(ParamGroup.OPTIMIZATION) {
     @Override
     public void apply(CompilerOptions options, boolean value) {
-      options.setAliasAllStrings(value);
+      options.setAliasStringsMode(value ? AliasStringsMode.ALL : AliasStringsMode.NONE);
     }
 
     @Override
     public boolean isApplied(CompilerOptions options) {
-      return options.aliasAllStrings;
+      return options.getAliasStringsMode() == AliasStringsMode.ALL;
     }
   },
 
@@ -679,12 +667,11 @@ public enum CompilationParam {
   OPTIMIZE_ARGUMENTS_ARRAY(ParamGroup.OPTIMIZATION) {
     @Override
     public void apply(CompilerOptions options, boolean value) {
-      options.setOptimizeArgumentsArray(value);
     }
 
     @Override
     public boolean isApplied(CompilerOptions options) {
-      return options.optimizeArgumentsArray;
+      return false;
     }
   },
 
@@ -704,13 +691,11 @@ public enum CompilationParam {
   /** Removes code that will never execute */
   REMOVE_DEAD_CODE(ParamGroup.OPTIMIZATION) {
     @Override
-    public void apply(CompilerOptions options, boolean value) {
-      options.setRemoveDeadCode(value);
-    }
+    public void apply(CompilerOptions options, boolean value) {}
 
     @Override
     public boolean isApplied(CompilerOptions options) {
-      return options.removeDeadCode;
+      return false;
     }
   },
 
@@ -962,7 +947,7 @@ public enum CompilationParam {
   },
 
   /** Preserve more non-type-related information from JSDoc. */
-  PRESERVE_FULL_JSDOC_DESCRIPTIONS(ParamGroup.MISC) {
+  PARSE_FULL_JSDOC_DESCRIPTIONS(ParamGroup.MISC) {
     @Override
     public void apply(CompilerOptions options, boolean value) {
       options.setParseJsDocDocumentation(
@@ -978,7 +963,7 @@ public enum CompilationParam {
     }
   },
 
-  PRESERVE_TYPE_ANNOTATIONS(true, ParamGroup.MISC) {
+  PARSE_TYPE_ANNOTATIONS(true, ParamGroup.MISC) {
     @Override
     public void apply(CompilerOptions options, boolean value) {
       options.setPreserveTypeAnnotations(value);

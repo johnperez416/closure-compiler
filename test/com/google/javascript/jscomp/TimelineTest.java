@@ -40,8 +40,8 @@ public class TimelineTest {
 
     @Override
     public boolean equals(Object obj) {
-      if (obj instanceof Event) {
-        return ((Event) obj).hashcode == hashcode;
+      if (obj instanceof Event event) {
+        return event.hashcode == hashcode;
       }
       return false;
     }
@@ -148,8 +148,8 @@ public class TimelineTest {
     timeline.add(ateBerries);
     timeline.add(ateGrapes);
 
-    assertThat(timeline.getSince("Monday")).containsExactly(ateBerries).inOrder();
-    assertThat(timeline.getSince("Monday")).containsExactly(ateGrapes).inOrder();
+    assertThat(timeline.getSince("Monday")).containsExactly(ateBerries);
+    assertThat(timeline.getSince("Monday")).containsExactly(ateGrapes);
   }
 
   @Test

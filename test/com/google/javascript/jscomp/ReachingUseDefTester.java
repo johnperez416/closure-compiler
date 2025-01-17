@@ -19,15 +19,17 @@ package com.google.javascript.jscomp;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.javascript.jscomp.AbstractCompiler.LifeCycleStage;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.NodeUtil.AllVarsDeclaredInFunction;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 
 /** Utility for testing {@link MaybeReachingVariableUse} and {@link MustBeReachingVariableDef} */
 final class ReachingUseDefTester {
@@ -71,10 +73,10 @@ final class ReachingUseDefTester {
     Scope funcBlockScope = computeFunctionBlockScope(script, root);
     ControlFlowGraph<Node> cfg = computeCfg(root);
     HashSet<Var> escaped = new HashSet<>();
-    HashMap<String, Var> allVarsInFn = new HashMap<>();
 
-    NodeUtil.getAllVarsDeclaredInFunction(
-        allVarsInFn, new ArrayList<>(), compiler, scopeCreator, funcBlockScope.getParent());
+    AllVarsDeclaredInFunction allVarsDeclaredInFunction =
+        NodeUtil.getAllVarsDeclaredInFunction(compiler, scopeCreator, funcBlockScope.getParent());
+    Map<String, Var> allVarsInFn = allVarsDeclaredInFunction.getAllVariables();
     DataFlowAnalysis.computeEscaped(
         funcBlockScope.getParent(), escaped, compiler, scopeCreator, allVarsInFn);
     reachingUse = new MaybeReachingVariableUse(cfg, escaped, allVarsInFn);
@@ -86,15 +88,15 @@ final class ReachingUseDefTester {
    * all uses of each variable in the test source.
    */
   void computeReachingDef(String src) {
-    Node script = parseScript(src, /*async=*/ false);
+    Node script = parseScript(src, /* async= */ false);
     root = script.getFirstChild();
     Scope funcBlockScope = computeFunctionBlockScope(script, root);
     ControlFlowGraph<Node> cfg = computeCfg(root);
     HashSet<Var> escaped = new HashSet<>();
-    HashMap<String, Var> allVarsInFn = new HashMap<>();
 
-    NodeUtil.getAllVarsDeclaredInFunction(
-        allVarsInFn, new ArrayList<>(), compiler, scopeCreator, funcBlockScope.getParent());
+    AllVarsDeclaredInFunction allVarsDeclaredInFunction =
+        NodeUtil.getAllVarsDeclaredInFunction(compiler, scopeCreator, funcBlockScope.getParent());
+    Map<String, Var> allVarsInFn = allVarsDeclaredInFunction.getAllVariables();
     DataFlowAnalysis.computeEscaped(
         funcBlockScope.getParent(), escaped, compiler, scopeCreator, allVarsInFn);
     reachingDef = new MustBeReachingVariableDef(cfg, compiler, escaped, allVarsInFn);
@@ -116,16 +118,18 @@ final class ReachingUseDefTester {
   }
 
   private ControlFlowGraph<Node> computeCfg(Node fn) {
-    ControlFlowAnalysis cfa = new ControlFlowAnalysis(compiler, false, true);
-    cfa.process(null, fn);
-    return cfa.getCfg();
+    return ControlFlowAnalysis.builder()
+        .setCompiler(compiler)
+        .setCfgRoot(fn)
+        .setIncludeEdgeAnnotations(true)
+        .computeCfg();
   }
 
   /**
    * Returns may-be-reaching uses of definition of variable `x` on the node extracted at label `D:`.
    */
-  Collection<Node> getComputedUses() {
-    return reachingUse.getUses("x", labelFinder.extractedDef);
+  ImmutableSet<Node> getComputedUses() {
+    return ImmutableSet.copyOf(reachingUse.getUses("x", labelFinder.extractedDef));
   }
 
   /**

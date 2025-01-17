@@ -33,12 +33,11 @@ import com.google.javascript.jscomp.modules.ClosureRequireProcessor.Require;
 import com.google.javascript.jscomp.modules.ModuleMapCreator.ModuleProcessor;
 import com.google.javascript.jscomp.modules.ModuleMetadataMap.ModuleMetadata;
 import com.google.javascript.rhino.Node;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Processor for goog.module
@@ -54,11 +53,11 @@ final class ClosureModuleProcessor implements ModuleProcessor {
 
     private final ModuleMetadata metadata;
     private final String srcFileName;
-    @Nullable private final ModulePath path;
+    private final @Nullable ModulePath path;
     private final ImmutableMap<String, Binding> namespace;
     private final ImmutableMap<String, Require> requiresByLocalName;
     private final AbstractCompiler compiler;
-    private Module resolved = null;
+    private @Nullable Module resolved = null;
 
     UnresolvedGoogModule(
         ModuleMetadata metadata,
@@ -75,9 +74,8 @@ final class ClosureModuleProcessor implements ModuleProcessor {
       this.compiler = compiler;
     }
 
-    @Nullable
     @Override
-    public ResolveExportResult resolveExport(
+    public @Nullable ResolveExportResult resolveExport(
         ModuleRequestResolver moduleRequestResolver, String exportName) {
       if (namespace.containsKey(exportName)) {
         return ResolveExportResult.of(namespace.get(exportName));
@@ -85,9 +83,8 @@ final class ClosureModuleProcessor implements ModuleProcessor {
       return ResolveExportResult.NOT_FOUND;
     }
 
-    @Nullable
     @Override
-    public ResolveExportResult resolveExport(
+    public @Nullable ResolveExportResult resolveExport(
         ModuleRequestResolver moduleRequestResolver,
         @Nullable String moduleSpecifier,
         String exportName,
@@ -119,7 +116,7 @@ final class ClosureModuleProcessor implements ModuleProcessor {
 
     /** A map from import bound name to binding. */
     Map<String, Binding> getAllResolvedImports(ModuleRequestResolver moduleRequestResolver) {
-      Map<String, Binding> imports = new HashMap<>();
+      Map<String, Binding> imports = new LinkedHashMap<>();
 
       for (String name : requiresByLocalName.keySet()) {
         ResolveExportResult b = resolveImport(moduleRequestResolver, name);
@@ -154,8 +151,8 @@ final class ClosureModuleProcessor implements ModuleProcessor {
                 moduleRequestResolver,
                 importRecord.moduleRequest(),
                 importRecord.importName(),
-                new HashSet<>(),
-                new HashSet<>());
+                new LinkedHashSet<>(),
+                new LinkedHashSet<>());
         if (!result.found() && !result.hadError()) {
           reportInvalidDestructuringRequire(requested, importRecord);
           return ResolveExportResult.ERROR;
@@ -192,9 +189,9 @@ final class ClosureModuleProcessor implements ModuleProcessor {
     private void reportInvalidDestructuringRequire(
         UnresolvedModule requested, Import importRecord) {
       String additionalInfo = "";
-      if (requested instanceof UnresolvedGoogModule) {
+      if (requested instanceof UnresolvedGoogModule unresolvedGoogModule) {
         // Detect some edge cases and given more helpful error messages.
-        Map<String, Binding> exports = ((UnresolvedGoogModule) requested).namespace;
+        ImmutableMap<String, Binding> exports = unresolvedGoogModule.namespace;
         if (exports.containsKey(Export.NAMESPACE)) {
           // Can't use destructuring imports on a goog.module with a default export like
           //   exports = class {
@@ -290,15 +287,19 @@ final class ClosureModuleProcessor implements ModuleProcessor {
   /** Traverses a subtree rooted at a module, gathering all exports and requires */
   private static class ModuleProcessingCallback extends AbstractPreOrderCallback {
     private final ModuleMetadata metadata;
+
     /** The Closure namespace 'a.b.c' from the `goog.module('a.b.c');` statement */
     private final String closureNamespace;
+
     // Note: the following two maps are mutable because in some cases, we need to check if a key has
     // already been added before trying to add a second.
 
     /** All named exports and explicit assignments of the `exports` object */
     private final Map<String, Binding> namespace;
+
     /** All required/forwardDeclared local names */
     private final Map<String, Require> requiresByLocalName;
+
     /** Whether we've come across an "exports = ..." assignment */
     private boolean seenExportsAssignment;
 

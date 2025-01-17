@@ -23,26 +23,16 @@ import com.google.common.collect.ImmutableList;
 import com.google.javascript.rhino.Node;
 import java.util.HashSet;
 import java.util.Set;
-import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@link InferConsts}.
- *
- */
+/** Tests for {@link InferConsts}. */
 @RunWith(JUnit4.class)
 public final class InferConstsTest extends CompilerTestCase {
   private FindConstants constFinder;
 
   private ImmutableList<String> names;
-
-  @Override
-  @Before
-  public void setUp() throws Exception {
-    super.setUp();
-  }
 
   @Override
   public CompilerPass getProcessor(final Compiler compiler) {
@@ -250,7 +240,14 @@ public final class InferConstsTest extends CompilerTestCase {
     assertConsts("import x from './mod';", notInferred("x"));
     assertConsts("import {x as y, z} from './mod';", notInferred("y", "z"));
     assertConsts("import * as x from './mod';", notInferred("x"));
-    assertConsts("import * as CONST_NAME from './mod';", declared("CONST_NAME"));
+    assertNotConsts("import * as CONST_NAME from './mod';", "CONST_NAME");
+  }
+
+  @Test
+  public void testConstantByConventionButNotInPractice() {
+    assertNotConsts("let CONST_NAME = 0; CONST_NAME++;", "CONST_NAME");
+    assertNotConsts("var CONST_NAME = 0; CONST_NAME++;", "CONST_NAME");
+    assertConsts("var CONST_NAME = 0;", inferred("CONST_NAME"));
   }
 
   private void assertNotConsts(String js, String... names) {
@@ -278,19 +275,19 @@ public final class InferConstsTest extends CompilerTestCase {
   }
 
   static Expectation declared(String... names) {
-    return new Expectation(/*isInferred=*/ false, /*isConst=*/ true, names);
+    return new Expectation(/* isInferred= */ false, /* isConst= */ true, names);
   }
 
   static Expectation inferred(String... names) {
-    return new Expectation(/*isInferred=*/ true, /*isConst=*/ true, names);
+    return new Expectation(/* isInferred= */ true, /* isConst= */ true, names);
   }
 
   static Expectation notInferred(String... names) {
-    return new Expectation(/*isInferred=*/ true, /*isConst=*/ false, names);
+    return new Expectation(/* isInferred= */ true, /* isConst= */ false, names);
   }
 
   static Expectation notDeclared(String... names) {
-    return new Expectation(/*isInferred=*/ false, /*isConst=*/ false, names);
+    return new Expectation(/* isInferred= */ false, /* isConst= */ false, names);
   }
 
   private static final class Expectation {

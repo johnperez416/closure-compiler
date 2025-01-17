@@ -18,22 +18,20 @@ package com.google.javascript.refactoring;
 
 import com.google.common.base.Strings;
 import com.google.javascript.jscomp.NodeTraversal;
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
- * A compiler node traversal callback that invokes matchers against every node and
- * keeps track of any suggested fixes from the refactoring.
+ * A compiler node traversal callback that invokes matchers against every node and keeps track of
+ * any suggested fixes from the refactoring.
  */
-final class JsFlumeCallback implements Callback {
+final class JsFlumeCallback implements NodeTraversal.Callback {
 
   private final Scanner scanner;
-  @Nullable
-  private final Pattern includeFilePattern;
+  private final @Nullable Pattern includeFilePattern;
   private final List<Match> matches = new ArrayList<>();
   private final List<SuggestedFix> fixes = new ArrayList<>();
 

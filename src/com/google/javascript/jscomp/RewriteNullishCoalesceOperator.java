@@ -15,10 +15,12 @@
  */
 package com.google.javascript.jscomp;
 
-import com.google.common.base.Supplier;
+import static com.google.javascript.jscomp.AstFactory.type;
+
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.Node;
+import java.util.function.Supplier;
 
 /** Replaces the ES2020 `??` operator with conditional (?:). */
 public final class RewriteNullishCoalesceOperator implements NodeTraversal.Callback, CompilerPass {
@@ -38,7 +40,7 @@ public final class RewriteNullishCoalesceOperator implements NodeTraversal.Callb
   @Override
   public void process(Node externs, Node root) {
     NodeTraversal.traverse(compiler, root, this);
-    TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, Feature.NULL_COALESCE_OP);
+    TranspilationPasses.maybeMarkFeatureAsTranspiledAway(compiler, root, Feature.NULL_COALESCE_OP);
   }
 
   @Override
@@ -69,10 +71,10 @@ public final class RewriteNullishCoalesceOperator implements NodeTraversal.Callb
     Node right = n.getLastChild().detach();
 
     Node let = astFactory.createSingleLetNameDeclaration(tempVarName);
-    Node assignName = astFactory.createName(tempVarName, left.getJSType());
+    Node assignName = astFactory.createName(tempVarName, type(left));
     Node assign = astFactory.createAssign(assignName, left);
     Node ne = astFactory.createNe(assign, astFactory.createNull());
-    Node hookName = astFactory.createName(tempVarName, left.getJSType());
+    Node hookName = astFactory.createName(tempVarName, type(left));
     Node hook = astFactory.createHook(ne, hookName, right);
 
     let.srcrefTreeIfMissing(left);

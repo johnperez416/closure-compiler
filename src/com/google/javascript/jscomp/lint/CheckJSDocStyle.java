@@ -33,7 +33,7 @@ import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.JSTypeExpression;
 import com.google.javascript.rhino.Node;
 import java.util.List;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Checks for various JSDoc-related style issues, such as function definitions without JsDoc, params
@@ -64,7 +64,7 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
   public static final DiagnosticType MISSING_RETURN_JSDOC =
       DiagnosticType.disabled(
           "JSC_MISSING_RETURN_JSDOC",
-          "Function with non-trivial return must have JSDoc indicating the return type.{0}");
+          "Function that returns a value must have JSDoc indicating the return type.{0}");
 
   public static final DiagnosticType OPTIONAL_PARAM_NOT_MARKED_OPTIONAL =
       DiagnosticType.disabled(
@@ -164,24 +164,7 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
 
   private void checkStyleForPrivateProperties(NodeTraversal t, Node n) {
     JSDocInfo jsDoc = NodeUtil.getBestJSDocInfo(n);
-
     checkForAtSignCodePresence(t, n, jsDoc);
-
-    if (NodeUtil.isEs6ConstructorMemberFunctionDef(n)) {
-      return;
-    }
-
-    final String name;
-    if (n.isMemberFunctionDef() || n.isGetterDef() || n.isSetterDef()) {
-      name = n.getString();
-    } else {
-      checkState(n.isAssign());
-      Node lhs = n.getFirstChild();
-      if (!lhs.isGetProp()) {
-        return;
-      }
-      name = lhs.getString();
-    }
   }
 
   private static void checkNoTypeOnGettersAndSetters(
@@ -311,11 +294,11 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
       }
 
       Node param = paramList.getFirstChild();
-      for (int i = 0; i < paramsFromJsDoc.size(); i++) {
+      for (String s : paramsFromJsDoc) {
         if (param.getJSDocInfo() != null) {
           t.report(param, MIXED_PARAM_JSDOC_STYLES);
         }
-        String name = paramsFromJsDoc.get(i);
+        String name = s;
         JSTypeExpression paramType = jsDoc.getParameterType(name);
         if (checkParam(t, param, name, paramType)) {
           return;
@@ -455,9 +438,7 @@ public final class CheckJSDocStyle extends AbstractPostOrderCallback implements 
       }
 
       // Shallow traversal, since we don't need to inspect within functions or expressions.
-      if (parent == null
-          || NodeUtil.isControlStructure(parent)
-          || NodeUtil.isStatementBlock(parent)) {
+      if (NodeUtil.isShallowStatementTree(parent)) {
         if (n.isReturn() && n.hasChildren()) {
           found = true;
           return false;

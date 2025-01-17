@@ -19,7 +19,6 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.collect.ImmutableSet;
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.jscomp.NodeTraversal.ScopedCallback;
 import com.google.javascript.jscomp.SyntacticScopeCreator.RedeclarationHandler;
 import com.google.javascript.rhino.IR;
@@ -29,7 +28,7 @@ import com.google.javascript.rhino.StaticSourceFile.SourceKind;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Checks that all variables are declared, that file-private variables are accessed only in the file
@@ -93,10 +92,9 @@ class VarCheck implements ScopedCallback, CompilerPass {
 
   private static final Node googForwardDeclare = IR.getprop(IR.name("goog"), "forwardDeclare");
 
-  // Vars that still need to be declared in externs. These will be declared
-  // at the end of the pass, or when we see the equivalent var declared
-  // in the normal code.
-  private final Set<String> varsToDeclareInExterns = new LinkedHashSet<>();
+  // Vars that were referenced in the externs without being declared in externs, even if they were
+  // defined in code. These will be declared at the end of this pass.
+  private final Set<String> undefinedNamesFromExterns = new LinkedHashSet<>();
 
   private final AbstractCompiler compiler;
 
@@ -153,8 +151,8 @@ class VarCheck implements ScopedCallback, CompilerPass {
         .setScopeCreator(scopeCreator)
         .traverseRoots(externs, root);
 
-    for (String varName : varsToDeclareInExterns) {
-      createSynthesizedExternVar(compiler, varName);
+    for (String varName : undefinedNamesFromExterns) {
+      createSynthesizedExternVar(varName, /* isFromUndefinedCodeRef= */ false);
     }
 
     if (dupHandler != null) {
@@ -164,7 +162,14 @@ class VarCheck implements ScopedCallback, CompilerPass {
 
   @Override
   public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
-    return true;
+    // VarCheck is one of the few passes that runs after unwrapping closure-unaware code during
+    // finalization, and unfortunately that kind of code can contain all sorts of references.
+    // We could adjust the pass order so that unwrapping happens after this pass, but that would
+    // move VarCheck before AST Validity checking. Instead, we will just teach VarCheck to skip
+    // closure-unaware code.
+    // TODO: b/321233583 - once NodeTraversal supports skipping closure unaware code as a feature,
+    // replace this check with that.
+    return !n.isClosureUnawareCode();
   }
 
   @Override
@@ -234,17 +239,17 @@ class VarCheck implements ScopedCallback, CompilerPass {
     // Check module dependencies.
     JSChunk currModule = currInput.getChunk();
     JSChunk varModule = varInput.getChunk();
-    JSChunkGraph moduleGraph = compiler.getModuleGraph();
+    JSChunkGraph chunkGraph = compiler.getChunkGraph();
     if (!validityCheck && varModule != currModule && varModule != null && currModule != null) {
       if (varModule.isWeak()) {
         this.handleUndeclaredVariableRef(t, n);
       }
 
-      if (moduleGraph.dependsOn(currModule, varModule)) {
+      if (chunkGraph.dependsOn(currModule, varModule)) {
         // The module dependency was properly declared.
       } else {
         if (scope.isGlobal()) {
-          if (moduleGraph.dependsOn(varModule, currModule)) {
+          if (chunkGraph.dependsOn(varModule, currModule)) {
             // The variable reference violates a declared module dependency.
             t.report(
                 n, VIOLATED_MODULE_DEP_ERROR, currModule.getName(), varModule.getName(), varName);
@@ -289,8 +294,11 @@ class VarCheck implements ScopedCallback, CompilerPass {
       // declared or marked as an extern. A failure at this point means that we have created
       // some variable/generated some code with an undefined reference.
       throw new IllegalStateException("Unexpected variable " + varName);
-    } else {
-      createSynthesizedExternVar(varName);
+    } else if (!undefinedNamesFromExterns.contains(varName)) {
+      // Skip this case if the name is already going to be added as an "undefined name from extern"
+      // That declaration must take priority, to avoid the RemoveUnnecessarySyntheticExterns pass
+      // accidentally treating the synthetic extern as unnecessary.
+      createSynthesizedExternVar(varName, /* isFromUndefinedCodeRef= */ true);
     }
   }
 
@@ -305,7 +313,7 @@ class VarCheck implements ScopedCallback, CompilerPass {
       for (String requiredSymbol : REQUIRED_SYMBOLS) {
         Var var = scope.getVar(requiredSymbol);
         if (var == null) {
-          varsToDeclareInExterns.add(requiredSymbol);
+          undefinedNamesFromExterns.add(requiredSymbol);
         }
       }
     }
@@ -324,6 +332,7 @@ class VarCheck implements ScopedCallback, CompilerPass {
           "Function",
           "Infinity",
           "JSCompiler_renameProperty",
+          "JSCOMPILER_PRESERVE", // added by CheckSideEffects
           "Map",
           "Math",
           "NaN",
@@ -348,10 +357,10 @@ class VarCheck implements ScopedCallback, CompilerPass {
           "window");
 
   /**
-   * Create a new variable in a synthetic script. This will prevent
-   * subsequent compiler passes from crashing.
+   * Create a new variable in a synthetic script. This will prevent subsequent compiler passes from
+   * crashing.
    */
-  static void createSynthesizedExternVar(AbstractCompiler compiler, String varName) {
+  private void createSynthesizedExternVar(String varName, boolean isFromUndefinedCodeRef) {
     Node nameNode = IR.name(varName);
 
     // Mark the variable as constant if it matches the coding convention
@@ -365,24 +374,16 @@ class VarCheck implements ScopedCallback, CompilerPass {
     }
 
     Node syntheticExternVar = IR.var(nameNode);
+    syntheticExternVar.setIsSynthesizedUnfulfilledNameDeclaration(isFromUndefinedCodeRef);
     getSynthesizedExternsRoot(compiler).addChildToBack(syntheticExternVar);
     compiler.reportChangeToEnclosingScope(syntheticExternVar);
   }
 
   /**
-   * Create a new variable in a synthetic script. This will prevent
-   * subsequent compiler passes from crashing.
+   * A check for name references in the externs inputs. These used to prevent a variable from
+   * getting renamed, but no longer have any effect.
    */
-  private void createSynthesizedExternVar(String varName) {
-    createSynthesizedExternVar(compiler, varName);
-    varsToDeclareInExterns.remove(varName);
-  }
-
-  /**
-   * A check for name references in the externs inputs. These used to prevent
-   * a variable from getting renamed, but no longer have any effect.
-   */
-  private class NameRefInExternsCheck implements Callback {
+  private class NameRefInExternsCheck implements NodeTraversal.Callback {
 
     @Override
     public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
@@ -425,7 +426,7 @@ class VarCheck implements ScopedCallback, CompilerPass {
                 return;
               }
               t.report(n, UNDEFINED_EXTERN_VAR_ERROR, n.getString());
-              varsToDeclareInExterns.add(n.getString());
+              undefinedNamesFromExterns.add(n.getString());
             }
             return;
           case ASSIGN:
@@ -458,7 +459,7 @@ class VarCheck implements ScopedCallback, CompilerPass {
         Scope scope = t.getScope();
         Var var = scope.getVar(n.getString());
         if (var == null) {
-          varsToDeclareInExterns.add(n.getString());
+          undefinedNamesFromExterns.add(n.getString());
         }
       }
     }

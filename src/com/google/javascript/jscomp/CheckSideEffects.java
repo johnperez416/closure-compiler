@@ -16,13 +16,15 @@
 
 package com.google.javascript.jscomp;
 
+import static com.google.common.base.Preconditions.checkState;
+
 import com.google.common.base.Ascii;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -40,17 +42,24 @@ import java.util.Set;
  */
 final class CheckSideEffects extends AbstractPostOrderCallback implements CompilerPass {
 
-  static final DiagnosticType USELESS_CODE_ERROR = DiagnosticType.warning(
-      "JSC_USELESS_CODE",
-      "Suspicious code. {0}");
+  static final DiagnosticType USELESS_CODE_ERROR =
+      DiagnosticType.warning("JSC_USELESS_CODE", "Suspicious code. {0}");
 
+  // Protect function is used to protect the underlying node from removal. At the very end, this
+  // protector function will be completely removed from production but the underlying node will be
+  // preserved.
   static final String PROTECTOR_FN = "JSCOMPILER_PRESERVE";
+
+  // J2CL protector function is used to protect the underlying node from removal until the very end
+  // so that referred prototype properties won't be removed by the compiler. At the very end, this
+  // protector function and its underyling node will be completely removed from production.
+  static final String J2CL_PROTECTOR_FN = "$J2CL_PRESERVE$";
 
   private final boolean report;
 
   private final List<Node> problemNodes = new ArrayList<>();
 
-  private final Set<String> noSideEffectExterns = new HashSet<>();
+  private final Set<String> noSideEffectExterns = new LinkedHashSet<>();
 
   private final AbstractCompiler compiler;
 
@@ -59,8 +68,7 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
   /** Whether the synthetic extern for JSCOMPILER_PRESERVE has been injected */
   private boolean preserveFunctionInjected = false;
 
-  CheckSideEffects(AbstractCompiler compiler, boolean report,
-      boolean protectSideEffectFreeCode) {
+  CheckSideEffects(AbstractCompiler compiler, boolean report, boolean protectSideEffectFreeCode) {
     this.compiler = compiler;
     this.report = report;
     this.protectSideEffectFreeCode = protectSideEffectFreeCode;
@@ -110,9 +118,19 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
       return;
     }
 
+    // These are used by the compiler's built-in runtime libraries for dependency management
+    // they have a special meaning used in Compiler.ensureLibraryInjected
+    if (n.isStringLit()
+        && n.getParent().isExprResult()
+        && n.getGrandparent().isScript()
+        && n.getSourceFileName().startsWith(AbstractCompiler.RUNTIME_LIB_DIR)
+        && n.getString().startsWith("require ")) {
+      return;
+    }
+
     boolean isResultUsed = NodeUtil.isExpressionResultUsed(n);
-    boolean isSimpleOp = NodeUtil.isSimpleOperator(n);
-    if (!isResultUsed) {
+    boolean isSimpleOp = NodeUtil.isSimpleOperator(n) || n.isGetProp() || n.isGetElem();
+    if (!isResultUsed && !n.isVoid()) {
       if (isSimpleOp || !t.getCompiler().getAstAnalyzer().mayHaveSideEffects(n)) {
         if (report) {
           String msg = "This code lacks side-effects. Is there a bug?";
@@ -142,10 +160,11 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
         boolean isDefinedInSrc = false;
         if (qname != null) {
           if (n.getFirstChild().isGetProp()) {
-            Node rootNameNode =
-                NodeUtil.getRootOfQualifiedName(n.getFirstChild());
-            isDefinedInSrc = rootNameNode != null && rootNameNode.isName()
-                && t.getScope().getVar(rootNameNode.getString()) != null;
+            Node rootNameNode = NodeUtil.getRootOfQualifiedName(n.getFirstChild());
+            isDefinedInSrc =
+                rootNameNode != null
+                    && rootNameNode.isName()
+                    && t.getScope().getVar(rootNameNode.getString()) != null;
           } else {
             isDefinedInSrc = t.getScope().getVar(qname) != null;
           }
@@ -154,8 +173,8 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
         if (qname != null && noSideEffectExterns.contains(qname) && !isDefinedInSrc) {
           problemNodes.add(n);
           if (report) {
-            String msg = "The result of the extern function call '" + qname
-                + "' is not being used.";
+            String msg =
+                "The result of the extern function call '" + qname + "' is not being used.";
             t.report(n, USELESS_CODE_ERROR, msg);
           }
         }
@@ -164,9 +183,8 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
   }
 
   /**
-   * Protect side-effect free nodes by making them parameters
-   * to a extern function call.  This call will be removed
-   * after all the optimizations passes have run.
+   * Protect side-effect free nodes by making them parameters to a extern function call. This call
+   * will be removed after all the optimizations passes have run.
    */
   private void protectSideEffects() {
     if (!problemNodes.isEmpty()) {
@@ -190,9 +208,7 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
     NodeUtil.createSynthesizedExternsSymbol(compiler, PROTECTOR_FN);
   }
 
-  /**
-   * Remove side-effect sync functions.
-   */
+  /** Remove side-effect sync functions. */
   static class StripProtection extends AbstractPostOrderCallback implements CompilerPass {
 
     private final AbstractCompiler compiler;
@@ -210,9 +226,20 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
     public void visit(NodeTraversal t, Node n, Node parent) {
       if (n.isCall()) {
         Node target = n.getFirstChild();
+        if (!target.isName()) {
+          return;
+        }
+
+        if (target.getString().equals(J2CL_PROTECTOR_FN)) {
+          // Do not let non-J2CL code abuse it.
+          checkState(n.getSourceFileName().endsWith(".java.js"), "Only allowed for J2CL code");
+          NodeUtil.deleteFunctionCall(n, compiler);
+          return;
+        }
+
         // TODO(johnlenz): add this to the coding convention
         // so we can remove goog.reflect.sinkValue as well.
-        if (target.isName() && target.getString().equals(PROTECTOR_FN)) {
+        if (target.getString().equals(PROTECTOR_FN)) {
           Node expr = n.getLastChild();
           n.detachChildren();
           n.replaceWith(expr);
@@ -223,10 +250,9 @@ final class CheckSideEffects extends AbstractPostOrderCallback implements Compil
   }
 
   /**
-   * Get fully qualified function names which are marked
-   * with @nosideeffects
+   * Get fully qualified function names which are marked with @nosideeffects
    *
-   * TODO(ChadKillingsworth) Add support for object literals
+   * <p>TODO(ChadKillingsworth) Add support for object literals
    */
   private class GetNoSideEffectExterns extends AbstractPostOrderCallback {
     @Override

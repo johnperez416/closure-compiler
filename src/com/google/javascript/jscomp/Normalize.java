@@ -27,12 +27,13 @@ import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The goal with this pass is to simplify the other passes, by making less complex statements.
@@ -49,8 +50,6 @@ import java.util.Set;
  * <ol>
  *   <li>Simplifies the AST by splitting var/let/const statements, moving initializers out of for
  *       loops, and converting whiles to fors.
- *   <li>Moves hoisted functions to the top of function scopes.
- *   <li>Rewrites unhoisted named function declarations to be var declarations.
  *   <li>Makes all variable names globally unique (extern or otherwise) so that no value is ever
  *       shadowed (note: "arguments" may require special handling).
  *   <li>Removes duplicate variable declarations.
@@ -60,14 +59,51 @@ import java.util.Set;
  *       var a = 0; for(a;a<0;a++) {}
  * </ol>
  */
-class Normalize implements CompilerPass {
+final class Normalize implements CompilerPass {
 
   private final AbstractCompiler compiler;
+  private final AstFactory astFactory;
   private final boolean assertOnChange;
 
-  Normalize(AbstractCompiler compiler, boolean assertOnChange) {
-    this.compiler = compiler;
-    this.assertOnChange = assertOnChange;
+  Normalize(Builder builder) {
+    this.compiler = builder.compiler;
+    this.assertOnChange = builder.assertOnChange;
+    this.astFactory = builder.compiler.createAstFactory();
+  }
+
+  static Normalize createNormalizeForOptimizations(AbstractCompiler compiler) {
+    // The default option values are the right ones for optimizations
+    return builder(compiler).build();
+  }
+
+  static Builder builder(AbstractCompiler compiler) {
+    return new Builder(compiler);
+  }
+
+  /** Configures and builds a {@link Normalize} object. */
+  static class Builder {
+    private final AbstractCompiler compiler;
+    private boolean assertOnChange = false;
+
+    Builder(AbstractCompiler compiler) {
+      this.compiler = compiler;
+    }
+
+    /**
+     * If the Normalize pass finds work to do, it will throw an exception.
+     *
+     * <p>This is intended for use in validating that an AST is already normalized.
+     *
+     * <p>This option is {@code false} by default.
+     */
+    Builder assertOnChange(boolean assertOnChange) {
+      this.assertOnChange = assertOnChange;
+      return this;
+    }
+
+    Normalize build() {
+      return new Normalize(this);
+    }
   }
 
   static void normalizeSyntheticCode(AbstractCompiler compiler, Node js, String prefix) {
@@ -75,9 +111,11 @@ class Normalize implements CompilerPass {
     NodeTraversal.traverse(
         compiler,
         js,
-        new MakeDeclaredNamesUnique(
-            new BoilerplateRenamer(
-                compiler.getCodingConvention(), compiler.getUniqueNameIdSupplier(), prefix)));
+        MakeDeclaredNamesUnique.builder()
+            .withRenamer(
+                new BoilerplateRenamer(
+                    compiler.getCodingConvention(), compiler.getUniqueNameIdSupplier(), prefix))
+            .build());
   }
 
   static Node parseAndNormalizeTestCode(AbstractCompiler compiler, String code) {
@@ -93,71 +131,98 @@ class Normalize implements CompilerPass {
     compiler.reportChangeToEnclosingScope(n);
   }
 
+  /** Is this a name node of a function expression? */
+  private static boolean isFunctionExpressionNameNode(Node n) {
+    if (n == null || !n.isName()) {
+      return false;
+    }
+    Node parent = n.getParent();
+    if (parent == null) {
+      return false;
+    }
+    return NodeUtil.isFunctionExpression(parent) && n.isFirstChildOf(parent);
+  }
+
   @Override
   public void process(Node externs, Node root) {
-    MakeDeclaredNamesUnique renamer = new MakeDeclaredNamesUnique();
+    MakeDeclaredNamesUnique renamer =
+        MakeDeclaredNamesUnique.builder().withAssertOnChange(assertOnChange).build();
     NodeTraversal.traverseRoots(compiler, renamer, externs, root);
 
     NodeTraversal.traverseRoots(
         compiler, new NormalizeStatements(compiler, assertOnChange), externs, root);
 
-    removeDuplicateDeclarations(externs, root);
-
-    new PropagateConstantAnnotationsOverVars(compiler, assertOnChange).process(externs, root);
+    NodeTraversal.builder()
+        .setCompiler(compiler)
+        .setCallback(new PropagateConstantPropertyOverVars(compiler, assertOnChange))
+        .setScopeCreator(new SyntacticScopeCreator(compiler, new DuplicateDeclarationHandler()))
+        .traverseRoots(externs, root);
 
     if (!compiler.getLifeCycleStage().isNormalized()) {
       compiler.setLifeCycleStage(LifeCycleStage.NORMALIZED);
     }
   }
 
-  /** Propagate constant annotations over the Var graph. */
-  static class PropagateConstantAnnotationsOverVars extends AbstractPostOrderCallback
-      implements CompilerPass {
+  /**
+   * Propagate constant annotations and IS_CONSTANT_NAME property over the Var graph.
+   *
+   * <p>Also invokes t.getScope() on every scope, for use with the {@link
+   * DuplicateDeclarationHandler}.
+   */
+  private static class PropagateConstantPropertyOverVars implements NodeTraversal.ScopedCallback {
     private final AbstractCompiler compiler;
     private final boolean assertOnChange;
 
-    PropagateConstantAnnotationsOverVars(AbstractCompiler compiler, boolean forbidChanges) {
+    PropagateConstantPropertyOverVars(AbstractCompiler compiler, boolean forbidChanges) {
       this.compiler = compiler;
       this.assertOnChange = forbidChanges;
     }
 
     @Override
-    public void process(Node externs, Node root) {
-      NodeTraversal.traverseRoots(compiler, this, externs, root);
+    public void enterScope(NodeTraversal t) {
+      // Cause the scope to be created, which will cause duplicate
+      // to be found.
+      t.getScope();
+    }
+
+    @Override
+    public void exitScope(NodeTraversal t) {
+      // Nothing to do.
+    }
+
+    @Override
+    public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+      return true;
     }
 
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
       // Note: Constant properties annotations are not propagated.
-      if (n.isName() || n.isStringKey()) {
-        if (n.getString().isEmpty()) {
-          return;
-        }
+      if (!n.isName() || n.getString().isEmpty()) {
+        return;
+      }
 
-        JSDocInfo info = null;
-        // Find the JSDocInfo for a top-level variable.
-        Var var = t.getScope().getVar(n.getString());
-        if (var != null) {
-          info = var.getJSDocInfo();
-        }
+      // Find the JSDocInfo for a top-level variable
+      Var var = t.getScope().getVar(n.getString());
+      JSDocInfo info = (var != null) ? var.getJSDocInfo() : null;
 
-        boolean shouldBeConstant =
-            (info != null && info.isConstant())
-                || NodeUtil.isConstantByConvention(compiler.getCodingConvention(), n);
-        boolean isMarkedConstant = n.getBooleanProp(Node.IS_CONSTANT_NAME);
-        if (shouldBeConstant && !isMarkedConstant) {
-          if (assertOnChange) {
-            String name = n.getString();
-            throw new IllegalStateException(
-                "Unexpected const change.\n"
-                    + "  name: "
-                    + name
-                    + "\n"
-                    + "  parent:"
-                    + n.getParent().toStringTree());
-          }
-          n.putBooleanProp(Node.IS_CONSTANT_NAME, true);
+      boolean shouldBeConstant =
+          (var != null && (var.isConst() || isFunctionExpressionNameNode(var.getNode())))
+              || (info != null && info.isConstant())
+              || NodeUtil.isConstantByConvention(compiler.getCodingConvention(), n);
+      boolean isMarkedConstant = n.getBooleanProp(Node.IS_CONSTANT_NAME);
+      if (shouldBeConstant && !isMarkedConstant) {
+        if (assertOnChange) {
+          String name = n.getString();
+          throw new IllegalStateException(
+              "Should be const but not marked as const.\n"
+                  + "  name: "
+                  + name
+                  + "\n"
+                  + "  parent:"
+                  + n.getParent().toStringTree());
         }
+        n.putBooleanProp(Node.IS_CONSTANT_NAME, true);
       }
     }
   }
@@ -181,7 +246,7 @@ class Normalize implements CompilerPass {
       NodeTraversal.traverseRoots(compiler, this, externs, root);
     }
 
-    private final Map<String, Boolean> constantMap = new HashMap<>();
+    private final Map<String, Boolean> constantMap = new LinkedHashMap<>();
 
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
@@ -246,15 +311,17 @@ class Normalize implements CompilerPass {
    */
   static class NormalizeStatements implements NodeTraversal.Callback {
     private final AbstractCompiler compiler;
+    private final AstFactory astFactory;
     private final boolean assertOnChange;
     private final RewriteLogicalAssignmentOperatorsHelper rewriteLogicalAssignmentOperatorsHelper;
 
     NormalizeStatements(AbstractCompiler compiler, boolean assertOnChange) {
       this.compiler = compiler;
       this.assertOnChange = assertOnChange;
+      this.astFactory = compiler.createAstFactory();
       this.rewriteLogicalAssignmentOperatorsHelper =
           new RewriteLogicalAssignmentOperatorsHelper(
-              compiler, compiler.createAstFactory(), compiler.getUniqueIdSupplier());
+              compiler, this.astFactory, compiler.getUniqueIdSupplier());
     }
 
     private void reportCodeChange(String changeDescription, Node n) {
@@ -284,21 +351,27 @@ class Normalize implements CompilerPass {
           break;
 
         case FUNCTION:
-          if (visitFunction(n, compiler)) {
+          if (visitFunction(n)) {
             reportCodeChange("Function declaration", n);
           }
           break;
 
-        case EXPORT:
-          splitExportDeclaration(n);
+        case ARRAYLIT:
+        case CALL:
+        case PARAM_LIST:
+        case NEW:
+        case OBJECTLIT:
+        case OPTCHAIN_CALL:
+          n.setTrailingComma(false);
           break;
 
         case NAME:
-        case GETPROP:
-        case OPTCHAIN_GETPROP:
-        case GETTER_DEF:
-        case SETTER_DEF:
           annotateConstantsByConvention(n);
+          annotateFunctionExpressionNameAsConstant(n);
+          break;
+
+        case DESTRUCTURING_LHS:
+          normalizeDestructuringLhs(n);
           break;
 
         case ASSIGN_OR:
@@ -314,13 +387,7 @@ class Normalize implements CompilerPass {
 
     /** Mark names and properties that are constants by convention. */
     private void annotateConstantsByConvention(Node n) {
-      checkState(
-          n.isName()
-              || n.isOptChainGetProp()
-              || n.isGetProp()
-              || n.isStringKey()
-              || n.isGetterDef()
-              || n.isSetterDef());
+      checkState(n.isName());
 
       // Need to check that variables have not been renamed, to determine whether
       // coding conventions still apply.
@@ -328,17 +395,17 @@ class Normalize implements CompilerPass {
         return;
       }
 
-      // There are only two cases where a string token
-      // may be a variable reference: The right side of a GETPROP (or OPTCHAIN_GETPROP)
-      // or an OBJECTLIT key.
-      boolean isGetprop = NodeUtil.isNormalOrOptChainGetProp(n);
-      if (!n.isName() && !NodeUtil.mayBeObjectLitKey(n) && !isGetprop) {
-        return;
-      }
-
       if (!n.getBooleanProp(Node.IS_CONSTANT_NAME)
           && NodeUtil.isConstantByConvention(compiler.getCodingConvention(), n)) {
-        checkState(!assertOnChange, "Unexpected const change: %s", n);
+        checkState(!assertOnChange, "Not marked as constant when it should be: %s", n);
+        n.putBooleanProp(Node.IS_CONSTANT_NAME, true);
+      }
+    }
+
+    /** Annotate function names on function expressions to be unconditionally constant */
+    private void annotateFunctionExpressionNameAsConstant(Node n) {
+      checkState(n.isName(), "Expected NAME node but got %s", n.getToken().toString());
+      if (isFunctionExpressionNameNode(n)) {
         n.putBooleanProp(Node.IS_CONSTANT_NAME, true);
       }
     }
@@ -348,56 +415,65 @@ class Normalize implements CompilerPass {
       if (n.getBooleanProp(Node.EXPORT_DEFAULT)) {
         return;
       }
+      List<Node> destructuringLhsNodes = new ArrayList<>();
       Node c = n.getFirstChild();
       if (NodeUtil.isDeclaration(c)) {
         c.detach();
 
         Node exportSpecs = new Node(Token.EXPORT_SPECS).srcref(n);
         n.addChildToFront(exportSpecs);
-        Iterable<Node> names;
         if (c.isClass() || c.isFunction()) {
-          names = Collections.singleton(c.getFirstChild());
+          Node name = c.getFirstChild();
           c.insertBefore(n);
+          addNameNodeToExportSpecs(exportSpecs, name);
         } else {
-          names = NodeUtil.findLhsNodesInNode(c);
+          NodeUtil.visitLhsNodesInNode(c, (name) -> addNameNodeToExportSpecs(exportSpecs, name));
           // Split up var declarations onto separate lines.
           for (Node child = c.getFirstChild(); child != null; ) {
             final Node next = child.getNext();
             child.detach();
             Node newDeclaration = new Node(c.getToken(), child).srcref(n);
             newDeclaration.insertBefore(n);
+            if (child.isDestructuringLhs()) {
+              // `export {a, b} = ...` changed to `var {a,b} = ...; export {a, b};`
+              // Hence we must normalize the destructuring declaration.
+              destructuringLhsNodes.add(child);
+            }
             child = next;
           }
         }
 
-        for (Node name : names) {
-          Node exportSpec = new Node(Token.EXPORT_SPEC).srcref(name);
-          exportSpec.addChildToFront(name.cloneNode());
-          exportSpec.addChildToFront(name.cloneNode());
-          exportSpecs.addChildToBack(exportSpec);
+        // normalize the newly added destructuring var declarations
+        for (Node destructuringLhsNode : destructuringLhsNodes) {
+          normalizeDestructuringLhs(destructuringLhsNode);
         }
 
-        compiler.reportChangeToEnclosingScope(n.getParent());
+        reportCodeChange("combined export and declaration", n.getParent());
       }
     }
 
+    private void addNameNodeToExportSpecs(Node exportSpecs, Node name) {
+      Node exportSpec = new Node(Token.EXPORT_SPEC).srcref(name);
+      exportSpec.addChildToFront(name.cloneNode());
+      exportSpec.addChildToFront(name.cloneNode());
+      exportSpecs.addChildToBack(exportSpec);
+    }
+
     /**
-     * Rewrite named unhoisted functions declarations to a known consistent behavior so we don't to
-     * different logic paths for the same code.
+     * Rewrite blockless arrow functions to have a block with a single return statement
      *
-     * <p>From: function f() {} to: var f = function () {}; and move it to the top of the block.
-     * This actually breaks semantics, but the semantics are also not well-defined cross-browser.
+     * <p>For example: {@code (x) => x} becomes {@code (x) => { return x; }}.
      *
-     * <p>See <a href="https://github.com/google/closure-compiler/pull/429">#429</a>
+     * <p>This simplifies optimizations as they can now assume all functions have a BLOCK.
      */
-    static boolean visitFunction(Node n, AbstractCompiler compiler) {
+    boolean visitFunction(Node n) {
       checkState(n.isFunction(), n);
       if (n.isFunction() && !NodeUtil.getFunctionBody(n).isBlock()) {
         Node returnValue = NodeUtil.getFunctionBody(n);
         Node body = IR.block(IR.returnNode(returnValue.detach()));
         body.srcrefTreeIfMissing(returnValue);
         n.addChildToBack(body);
-        compiler.reportChangeToEnclosingScope(body);
+        reportCodeChange("blockless arrow function", body);
       }
       return false;
     }
@@ -411,6 +487,7 @@ class Normalize implements CompilerPass {
       // Only inspect the children of SCRIPTs, BLOCKs and LABELs, as all these
       // are the only legal place for VARs and FOR statements.
       if (NodeUtil.isStatementBlock(n) || n.isLabel()) {
+        // makes sure that var [a,b] destructuring from for-loop initializer is also extracted
         extractForInitializer(n, null, null);
       }
 
@@ -424,10 +501,104 @@ class Normalize implements CompilerPass {
         moveNamedFunctions(n.getLastChild());
       }
 
+      if (NodeUtil.isClassStaticBlock(n)) {
+        moveNamedFunctions(n);
+      }
+
+      if (n.isExport()) {
+        // Perform the split in pre-order traversal to accurately normalize destructuring
+        // declarations.
+        splitExportDeclaration(n);
+      }
+
       if (NodeUtil.isCompoundAssignmentOp(n) && !NodeUtil.isLogicalAssignmentOp(n)) {
         // Logical assignments should be handled in visit(), not here
         normalizeAssignShorthand(n);
       }
+    }
+
+    /**
+     * Split a var destructuring declaration into stub declarations of individual LHS name nodes
+     * following by the destructuring pattern assignment.
+     */
+    private void normalizeDestructuringLhs(Node n) {
+      if (isVarDestructuringDeclaration(n)) {
+        rewriteVarDestructuringDeclaration(n);
+      }
+    }
+
+    /** Is this a var destructuring LHS like `[a,b]` in `var [a,b] = ...` */
+    private boolean isVarDestructuringDeclaration(Node n) {
+      return n.isDestructuringLhs() // `[a,b]`
+          && (n.getFirstChild().isArrayPattern()
+              || n.getFirstChild()
+                  .isObjectPattern()) // `var [a,b] = [5,6];` or `var {a,b} = {a: 5, b: 6};`
+          && n.getParent().isVar(); // `var [a,b] = [5,6];`
+    }
+
+    /**
+     * Transforms a var destructuring array declarations into stub declarations of the individual
+     * lhs names within the array. For example:
+     *
+     * <pre>
+     *    var [a, b = 3] = ....
+     * to:
+     *    var a; var b; [a, b = 3] = ...
+     * </pre>
+     *
+     * Same for object destructuring declarations. For example:
+     *
+     * <pre>
+     *    var {a, b = 3} = ....
+     * to:
+     *    var a; var b; ({a, b = 3} = ...);
+     * </pre>
+     *
+     * Before this function is used, {@code extractForInitializer} has already run during pre-order
+     * traversal, so we need not worry about destructuring declarations in the for loop initializers
+     * (e.g. `for (var [a,b] ...)` is already rewritten before this). Also, export declarations are
+     * already handled in `splitExportDeclaration` during pre-order traversal.
+     */
+    private void rewriteVarDestructuringDeclaration(Node destructuringLhs) {
+      checkState(
+          !destructuringLhs.getGrandparent().isExport(),
+          "Export destructuring declarations should be already handled in `splitExportDeclaration`"
+              + " during pre-order traversal.");
+      Node var = destructuringLhs.getParent();
+
+      // create a stub declaration for each name in the destructuring pattern
+      NodeUtil.visitLhsNodesInNode(
+          destructuringLhs,
+          (name) -> {
+            // Add a declaration outside the destructuring pattern for the given name.
+            checkState(
+                name.isName(),
+                "lhs in destructuring declaration should be a simple name. (%s)",
+                name);
+            Node newName = IR.name(name.getString()).srcref(name);
+            if (name.getBooleanProp(Node.IS_CONSTANT_NAME)) {
+              // if old name was a const, new name should be too
+              // e.g. when rewriting `{VALUE} = ...` the `VALUE` is const by coding convention
+              newName.putBooleanProp(Node.IS_CONSTANT_NAME, true);
+            }
+            Node newVar = IR.var(newName).srcref(name);
+            newVar.insertBefore(var);
+          });
+
+      // Transform destructuring var declaration to assignment. That is, `var [a, b] = ...` to `[a,
+      // b] = ...` and `var {a, b} = ...` to `({a, b} = ...);`
+      Node destructuringPattern = destructuringLhs.removeFirstChild();
+      checkState(destructuringPattern.isDestructuringPattern(), "Expected destructuring pattern.");
+
+      Node rhs = destructuringLhs.removeFirstChild();
+      Node assign = astFactory.createAssign(destructuringPattern, rhs);
+      assign.srcref(var);
+      Node expr = astFactory.exprResult(assign);
+      expr.srcref(var);
+
+      var.replaceWith(expr);
+      destructuringLhs.detach();
+      reportCodeChange("Var destructuring declaration rewritten", expr);
     }
 
     // TODO(johnlenz): Move this to NodeTypeNormalizer once the unit tests are
@@ -471,7 +642,7 @@ class Normalize implements CompilerPass {
      * @param before The node to insert the initializer before.
      * @param beforeParent The parent of the node before which the initializer will be inserted.
      */
-    private void extractForInitializer(Node n, Node before, Node beforeParent) {
+    private void extractForInitializer(Node n, @Nullable Node before, @Nullable Node beforeParent) {
 
       for (Node next, c = n.getFirstChild(); c != null; c = next) {
         next = c.getNext();
@@ -492,28 +663,28 @@ class Normalize implements CompilerPass {
                 //    for (var [a, b = 3] in c) {}
                 // to:
                 //    var a; var b; for ([a, b = 3] in c) {}
-                List<Node> lhsNodes = NodeUtil.findLhsNodesInNode(lhs);
-                for (Node name : lhsNodes) {
-                  // Add a declaration outside the for loop for the given name.
-                  checkState(
-                      name.isName(),
-                      "lhs in destructuring declaration should be a simple name.",
-                      name);
-                  Node newName = IR.name(name.getString()).srcref(name);
-                  Node newVar = IR.var(newName).srcref(name);
-                  newVar.insertBefore(insertBefore);
-                }
+                NodeUtil.visitLhsNodesInNode(
+                    lhs,
+                    (name) -> {
+                      // Add a declaration outside the for loop for the given name.
+                      checkState(
+                          name.isName(),
+                          "lhs in destructuring declaration should be a simple name. (%s)",
+                          name);
+                      Node newName = IR.name(name.getString()).srcref(name);
+                      Node newVar = IR.var(newName).srcref(name);
+                      newVar.insertBefore(insertBefore);
+                    });
 
                 // Transform for (var [a, b]... ) to for ([a, b]...
                 Node destructuringPattern = lhs.removeFirstChild();
                 first.replaceWith(destructuringPattern);
               } else {
                 // Transform:
-                //    for (var a = 1 in b) {}
+                //    for (var a in b) {}
                 // to:
-                //    var a = 1; for (a in b) {};
+                //    var a; for (a in b) {};
                 Node newStatement = first;
-                // Clone just the node, to remove any initialization.
                 Node name = newStatement.getFirstChild().cloneNode();
                 first.replaceWith(name);
                 newStatement.insertBefore(insertBefore);
@@ -584,12 +755,12 @@ class Normalize implements CompilerPass {
 
     /**
      * Move all the functions that are valid at the execution of the first statement of the function
-     * to the beginning of the function definition.
+     * or static block to the beginning of the function definition or class static block.
      */
-    private void moveNamedFunctions(Node functionBody) {
-      checkState(functionBody.getParent().isFunction());
+    private void moveNamedFunctions(Node body) {
+      checkState(body.getParent().isFunction() || NodeUtil.isClassStaticBlock(body));
       Node insertAfter = null;
-      Node current = functionBody.getFirstChild();
+      Node current = body.getFirstChild();
       // Skip any declarations at the beginning of the function body, they
       // are already in the right place.
       while (current != null && NodeUtil.isFunctionDeclaration(current)) {
@@ -607,8 +778,9 @@ class Normalize implements CompilerPass {
 
           // Read the function at the top of the function body (after any
           // previous declarations).
-          insertAfter = addToFront(functionBody, current, insertAfter);
-          reportCodeChange("Move function declaration not at top of function", functionBody);
+          insertAfter = addToFront(body, current, insertAfter);
+          reportCodeChange(
+              "Move function declaration not at top of function or class static block", body);
         }
         current = next;
       }
@@ -622,11 +794,12 @@ class Normalize implements CompilerPass {
       shorthand.setToken(NodeUtil.getOpFromAssignmentOp(shorthand));
       Node insertPoint = IR.empty();
       shorthand.replaceWith(insertPoint);
-      Node assign = IR.assign(name.cloneNode().srcref(name), shorthand).srcref(shorthand);
+      Node assign =
+          astFactory.createAssign(name.cloneNode().srcref(name), shorthand).srcref(shorthand);
       assign.setJSDocInfo(shorthand.getJSDocInfo());
       shorthand.setJSDocInfo(null);
       insertPoint.replaceWith(assign);
-      compiler.reportChangeToEnclosingScope(assign);
+      reportCodeChange("assign shorthand", assign);
     }
 
     /**
@@ -644,20 +817,11 @@ class Normalize implements CompilerPass {
     }
   }
 
-  /** Remove duplicate VAR declarations. */
-  private void removeDuplicateDeclarations(Node externs, Node root) {
-    NodeTraversal.builder()
-        .setCompiler(compiler)
-        .setCallback(new ScopeTicklingCallback())
-        .setScopeCreator(new SyntacticScopeCreator(compiler, new DuplicateDeclarationHandler()))
-        .traverseRoots(externs, root);
-  }
-
   /** ScopeCreator duplicate declaration handler. */
   private final class DuplicateDeclarationHandler
       implements SyntacticScopeCreator.RedeclarationHandler {
 
-    private final Set<Var> hasOkDuplicateDeclaration = new HashSet<>();
+    private final Set<Var> hasOkDuplicateDeclaration = new LinkedHashSet<>();
 
     /** Remove duplicate VAR declarations discovered during scope creation. */
     @Override
@@ -687,7 +851,6 @@ class Normalize implements CompilerPass {
         }
       } else if (parent.isVar()) {
         checkState(parent.hasOneChild());
-
         replaceVarWithAssignment(n, parent, parent.getParent());
       }
     }
@@ -712,7 +875,7 @@ class Normalize implements CompilerPass {
         // Convert "var name = value" to "name = value"
         Node value = n.getFirstChild();
         value.detach();
-        Node replacement = IR.assign(n, value);
+        Node replacement = astFactory.createAssign(n, value);
         replacement.setJSDocInfo(parent.getJSDocInfo());
         replacement.srcrefIfMissing(parent);
         Node statement = NodeUtil.newExpr(replacement);
@@ -724,31 +887,6 @@ class Normalize implements CompilerPass {
         parent.detach();
         reportCodeChange("Duplicate VAR declaration", grandparent);
       }
-    }
-  }
-
-  /** A simple class that causes scope to be created. */
-  private static final class ScopeTicklingCallback implements NodeTraversal.ScopedCallback {
-    @Override
-    public void enterScope(NodeTraversal t) {
-      // Cause the scope to be created, which will cause duplicate
-      // to be found.
-      t.getScope();
-    }
-
-    @Override
-    public void exitScope(NodeTraversal t) {
-      // Nothing to do.
-    }
-
-    @Override
-    public boolean shouldTraverse(NodeTraversal nodeTraversal, Node n, Node parent) {
-      return true;
-    }
-
-    @Override
-    public void visit(NodeTraversal t, Node n, Node parent) {
-      // Nothing to do.
     }
   }
 }

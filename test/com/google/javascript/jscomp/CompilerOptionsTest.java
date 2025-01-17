@@ -19,13 +19,15 @@ package com.google.javascript.jscomp;
 import static com.google.common.truth.Truth.assertThat;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 
+import com.google.common.collect.ImmutableMap;
+import com.google.javascript.jscomp.CompilerOptions.BrowserFeaturesetYear;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.util.Map;
 import java.util.regex.Pattern;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -51,6 +53,64 @@ public final class CompilerOptionsTest {
 
     options.setBrowserFeaturesetYear(2021);
     assertThat(options.getOutputFeatureSet()).isEqualTo(FeatureSet.BROWSER_2021);
+
+    options.setBrowserFeaturesetYear(2022);
+    assertThat(options.getOutputFeatureSet()).isEqualTo(FeatureSet.BROWSER_2022);
+
+    options.setBrowserFeaturesetYear(2023);
+    assertThat(options.getOutputFeatureSet()).isEqualTo(FeatureSet.BROWSER_2023);
+
+    options.setBrowserFeaturesetYear(2024);
+    assertThat(options.getOutputFeatureSet()).isEqualTo(FeatureSet.BROWSER_2024);
+
+    options.setBrowserFeaturesetYear(2025);
+    assertThat(options.getOutputFeatureSet()).isEqualTo(FeatureSet.BROWSER_2025);
+  }
+
+  @Test
+  public void testBrowserFeaturesetYearOptionSetsAssumeES5() {
+    CompilerOptions options = new CompilerOptions();
+    options.setBrowserFeaturesetYear(2012);
+    assertThat(options.getDefineReplacements().get("$jscomp.ASSUME_ES5").getToken())
+        .isEqualTo(Token.FALSE);
+    options.setBrowserFeaturesetYear(2019);
+    assertThat(options.getDefineReplacements().get("$jscomp.ASSUME_ES5").getToken())
+        .isEqualTo(Token.TRUE);
+  }
+
+  @Test
+  public void testBrowserFeaturesetYearOptionSetsAssumeES6() {
+    CompilerOptions options = new CompilerOptions();
+    options.setBrowserFeaturesetYear(2012);
+    assertThat(options.getDefineReplacements().get("$jscomp.ASSUME_ES6").getToken())
+        .isEqualTo(Token.FALSE);
+    options.setBrowserFeaturesetYear(2018);
+    assertThat(options.getDefineReplacements().get("$jscomp.ASSUME_ES6").getToken())
+        .isEqualTo(Token.TRUE);
+    options.setBrowserFeaturesetYear(2020);
+    assertThat(options.getDefineReplacements().get("$jscomp.ASSUME_ES2020").getToken())
+        .isEqualTo(Token.FALSE);
+    options.setBrowserFeaturesetYear(2021);
+    assertThat(options.getDefineReplacements().get("$jscomp.ASSUME_ES2020").getToken())
+        .isEqualTo(Token.TRUE);
+  }
+
+  @Test
+  public void testMinimumBrowserFeatureSetYearRequiredFor() {
+    assertThat(BrowserFeaturesetYear.minimumRequiredFor(Feature.GETTER))
+        .isEqualTo(BrowserFeaturesetYear.YEAR_2012);
+    assertThat(BrowserFeaturesetYear.minimumRequiredFor(Feature.CLASSES))
+        .isEqualTo(BrowserFeaturesetYear.YEAR_2018);
+    assertThat(BrowserFeaturesetYear.minimumRequiredFor(Feature.REGEXP_UNICODE_PROPERTY_ESCAPE))
+        .isEqualTo(BrowserFeaturesetYear.YEAR_2021);
+  }
+
+  @Test
+  public void testMinimumBrowserFeatureSetYearRequiredFor_returnsUnspecifiedIfUnsupported() {
+    // Newer features, in particular anything in ES_NEXT, may not be part of a browser featureset
+    // year yet.
+    assertThat(BrowserFeaturesetYear.minimumRequiredFor(Feature.PUBLIC_CLASS_FIELDS))
+        .isEqualTo(null);
   }
 
   @Test
@@ -61,7 +121,7 @@ public final class CompilerOptionsTest {
     options.setDefineToNumberLiteral("threeVar", 3);
     options.setDefineToStringLiteral("strVar", "str");
 
-    Map<String, Node> actual = options.getDefineReplacements();
+    ImmutableMap<String, Node> actual = options.getDefineReplacements();
     assertEquivalent(new Node(Token.TRUE), actual.get("trueVar"));
     assertEquivalent(new Node(Token.FALSE), actual.get("falseVar"));
     assertEquivalent(Node.newNumber(3), actual.get("threeVar"));
@@ -104,7 +164,6 @@ public final class CompilerOptionsTest {
     options.setDefineToBooleanLiteral("falseVar", false);
     options.setDefineToNumberLiteral("threeVar", 3);
     options.setDefineToStringLiteral("strVar", "str");
-    options.setOptimizeArgumentsArray(true);
     options.setAmbiguateProperties(false);
     options.setOutputCharset(US_ASCII);
 
@@ -114,13 +173,12 @@ public final class CompilerOptionsTest {
     options =
         CompilerOptions.deserialize(new ByteArrayInputStream(byteArrayOutputStream.toByteArray()));
 
-    Map<String, Node> actual = options.getDefineReplacements();
+    ImmutableMap<String, Node> actual = options.getDefineReplacements();
     assertEquivalent(new Node(Token.TRUE), actual.get("trueVar"));
     assertEquivalent(new Node(Token.FALSE), actual.get("falseVar"));
     assertEquivalent(Node.newNumber(3), actual.get("threeVar"));
     assertEquivalent(Node.newString("str"), actual.get("strVar"));
     assertThat(options.shouldAmbiguateProperties()).isFalse();
-    assertThat(options.optimizeArgumentsArray).isTrue();
     assertThat(options.getOutputCharset()).isEqualTo(US_ASCII);
   }
 

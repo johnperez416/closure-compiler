@@ -22,7 +22,7 @@ import com.google.javascript.jscomp.base.Tri;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Transform the structure of the AST so that the number of explicit exits
@@ -200,8 +200,9 @@ class MinimizeExitPoints extends AbstractPeepholeOptimization {
   void tryMinimizeSwitchExits(Node n, Token exitType, @Nullable String labelName) {
     checkState(n.isSwitch());
     // Skipping the switch condition, visit all the children.
-    for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
-      if (c != n.getLastChild()) {
+    Node switchBody = n.getSecondChild();
+    for (Node c = switchBody.getFirstChild(); c != null; c = c.getNext()) {
+      if (c != switchBody.getLastChild()) {
         tryMinimizeSwitchCaseExits(c, exitType, labelName);
       } else {
         // Last case, the last case block can be optimized more aggressively.

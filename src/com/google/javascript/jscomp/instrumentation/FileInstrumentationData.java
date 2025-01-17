@@ -16,21 +16,18 @@
 
 package com.google.javascript.jscomp.instrumentation;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.primitives.UnsignedBytes;
 import com.google.javascript.rhino.Node;
 import java.util.BitSet;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Holds instrumentation details related to a file, namely, the filename,
- * the array name used in instrumentation, and the lines which were
- * instrumented (in encoded form).
+ * Holds instrumentation details related to a file, namely, the filename, the array name used in
+ * instrumentation, and the lines which were instrumented (in encoded form).
  */
-@GwtIncompatible("com.google.common.primitives.UnsignedBytes")
 class FileInstrumentationData {
   private final BitSet instrumentedBits; // Instrumented lines, a bit per line
   private final String arrayName;
@@ -65,10 +62,8 @@ class FileInstrumentationData {
 
     @Override
     public boolean equals(Object object) {
-      if (object instanceof BranchIndexPair) {
-        BranchIndexPair that = (BranchIndexPair) object;
-        return this.getLine() == that.getLine()
-            && this.getBranch() == that.getBranch();
+      if (object instanceof BranchIndexPair that) {
+        return this.getLine() == that.getLine() && this.getBranch() == that.getBranch();
       }
       return false;
     }
@@ -94,11 +89,11 @@ class FileInstrumentationData {
     instrumentedBits = new BitSet();
 
     branchPresent = new BitSet();
-    branchesInLine = new HashMap<>();
-    branchNodes = new HashMap<>();
+    branchesInLine = new LinkedHashMap<>();
+    branchNodes = new LinkedHashMap<>();
   }
 
-   String getArrayName() {
+  String getArrayName() {
     return arrayName;
   }
 
@@ -116,6 +111,7 @@ class FileInstrumentationData {
 
   /**
    * Store a node to be instrumented later for branch coverage.
+   *
    * @param lineNumber 1-based line number
    * @param branchNumber 1-based branch number
    * @param block the node of the conditional block.
@@ -131,6 +127,7 @@ class FileInstrumentationData {
 
   /**
    * Get the block node to be instrumented for branch coverage.
+   *
    * @param lineNumber 1-based line number
    * @param branchNumber 1-based branch number
    * @return the node of the conditional block.
@@ -145,10 +142,9 @@ class FileInstrumentationData {
   }
 
   /**
-   * Returns a byte-wise hex string representation of the BitField from
-   * MSB (Most Significant Byte) to LSB (Least Significant Byte).
-   * Eg. Single byte: a setting of "0001 1111", returns "1f"
-   * Eg. Multiple bytes: a setting of "0000 0010 0001 1111", returns "1f02"
+   * Returns a byte-wise hex string representation of the BitField from MSB (Most Significant Byte)
+   * to LSB (Least Significant Byte). Eg. Single byte: a setting of "0001 1111", returns "1f" Eg.
+   * Multiple bytes: a setting of "0000 0010 0001 1111", returns "1f02"
    *
    * @return string representation of bits set
    */
@@ -181,8 +177,8 @@ class FileInstrumentationData {
   }
 
   /**
-   * Mark given 1-based line number as instrumented. Zero, Negative numbers
-   * are not allowed.
+   * Mark given 1-based line number as instrumented. Zero, Negative numbers are not allowed.
+   *
    * @param lineNumber the line number which was instrumented
    */
   void setLineAsInstrumented(int lineNumber) {
@@ -195,6 +191,7 @@ class FileInstrumentationData {
 
   /**
    * Mark a given 1-based line number has branch presented.
+   *
    * @param lineNumber the line number which has conditional branches.
    */
   void setBranchPresent(int lineNumber) {
@@ -207,6 +204,7 @@ class FileInstrumentationData {
 
   /**
    * Add a number of branches to a line.
+   *
    * @param lineNumber the line number that contains the branch statement.
    * @param numberOfBranches the number of branches to add to the record.
    */
@@ -222,6 +220,7 @@ class FileInstrumentationData {
 
   /**
    * Get the number of branches on a line
+   *
    * @param lineNumber - the 1-based line number
    * @return the number of branches on the line.
    */
@@ -233,5 +232,4 @@ class FileInstrumentationData {
       return numBranches;
     }
   }
-
 }

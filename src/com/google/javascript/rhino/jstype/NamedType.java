@@ -52,7 +52,7 @@ import com.google.javascript.rhino.StaticScope;
 import com.google.javascript.rhino.StaticSlot;
 import java.util.ArrayList;
 import java.util.List;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A {@code NamedType} is a named reference to some other type.  This provides
@@ -101,7 +101,7 @@ public final class NamedType extends ProxyObjectType {
   private final int charno;
   private final ResolutionKind resolutionKind;
 
-  @Nullable private StaticTypedScope resolutionScope;
+  private @Nullable StaticTypedScope resolutionScope;
 
   /** Validates the type resolution. */
   private transient Predicate<JSType> validator;
@@ -114,7 +114,7 @@ public final class NamedType extends ProxyObjectType {
   // TODO(lharker): Generalize this pattern instead of storing these arbitrary fields.
 
   /** Property-defining continuations. */
-  private transient List<PropertyContinuation> propertyContinuations = null;
+  private transient @Nullable List<PropertyContinuation> propertyContinuations = null;
 
   /**
    * Template types defined on a named, not yet resolved type, or {@code null} if none. These are
@@ -333,7 +333,7 @@ public final class NamedType extends ProxyObjectType {
         // when `ImportedType` is not defined in the files it can see.
         setReferencedType(new NoResolvedType(registry, getReferenceName(), getTemplateTypes()));
         if (validator != null) {
-          validator.apply(getReferencedType());
+          var unused = validator.apply(getReferencedType());
         }
       } else {
         warning(reporter, "Missing type for `typeof` value. The value must be declared and const.");
@@ -362,7 +362,7 @@ public final class NamedType extends ProxyObjectType {
       type = type.restrictByNotNullOrUndefined();
     }
     if (validator != null) {
-      validator.apply(type);
+      var unused = validator.apply(type);
     }
     setReferencedType(type);
     checkEnumElementCycle(reporter);
@@ -401,12 +401,14 @@ public final class NamedType extends ProxyObjectType {
       if (localVariableShadowsGlobalNamespace(root)) {
         msg += "\nIt's possible that a local variable called '" + root
             + "' is shadowing the intended global namespace.";
+      } else if (resolutionScope.getSlot(root) != null) {
+        msg += "\nIt's possible that '" + reference + "' refers to a value, not a type.";
       }
       warning(reporter, msg);
     } else {
       setReferencedType(new NoResolvedType(registry, getReferenceName(), getTemplateTypes()));
       if (validator != null) {
-        validator.apply(getReferencedType());
+        var unused = validator.apply(getReferencedType());
       }
     }
   }

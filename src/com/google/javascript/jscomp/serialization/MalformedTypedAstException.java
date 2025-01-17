@@ -16,7 +16,7 @@
 
 package com.google.javascript.jscomp.serialization;
 
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Emitted when deserialization sees a TypedAst with semantic errors.
@@ -46,5 +46,9 @@ public final class MalformedTypedAstException extends RuntimeException {
 
   public MalformedTypedAstException(Object msg) {
     super(msg.toString());
+  }
+
+  public MalformedTypedAstException(Object msg, Throwable cause) {
+    super(msg.toString(), cause);
   }
 }

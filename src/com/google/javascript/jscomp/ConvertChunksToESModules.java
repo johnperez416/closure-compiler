@@ -17,19 +17,20 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPreOrderCallback;
 import com.google.javascript.jscomp.deps.ModuleLoader;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
-import com.google.javascript.rhino.jstype.JSTypeNative;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Finds all references to global symbols in a different output chunk and add ES Module imports and
@@ -109,7 +110,7 @@ final class ConvertChunksToESModules implements CompilerPass {
     // Force every output chunk to parse as an ES Module. If a chunk has no imports and
     // no exports, add an empty export list to generate an empty export statement:
     // example: export {};
-    for (JSChunk chunk : compiler.getModuleGraph().getAllModules()) {
+    for (JSChunk chunk : compiler.getChunkGraph().getAllChunks()) {
       if (!crossChunkExports.containsKey(chunk)
           && !crossChunkImports.containsKey(chunk)
           && !chunk.getInputs().isEmpty()) {
@@ -121,6 +122,8 @@ final class ConvertChunksToESModules implements CompilerPass {
     addExportStatements();
     addImportStatements();
     rewriteDynamicImportCallbacks();
+
+    NodeUtil.addFeatureToAllScripts(root, FeatureSet.Feature.MODULES, compiler);
   }
 
   /**
@@ -128,7 +131,7 @@ final class ConvertChunksToESModules implements CompilerPass {
    * compilation, all input files should be scripts.
    */
   private void convertChunkSourcesToModules() {
-    for (JSChunk chunk : compiler.getModuleGraph().getAllModules()) {
+    for (JSChunk chunk : compiler.getChunkGraph().getAllChunks()) {
       if (chunk.getInputs().isEmpty()) {
         continue;
       }
@@ -166,7 +169,7 @@ final class ConvertChunksToESModules implements CompilerPass {
   /** Add export statements to chunks */
   private void addExportStatements() {
     for (Map.Entry<JSChunk, Set<String>> jsModuleExports : crossChunkExports.entrySet()) {
-      CompilerInput firstInput = jsModuleExports.getKey().getInput(0);
+      CompilerInput firstInput = jsModuleExports.getKey().getFirst();
       Node moduleBody = firstInput.getAstRoot(compiler).getFirstChild();
       checkState(moduleBody != null && moduleBody.isModuleBody());
       Node exportSpecs = new Node(Token.EXPORT_SPECS);
@@ -199,7 +202,7 @@ final class ConvertChunksToESModules implements CompilerPass {
         crossChunkImports.entrySet()) {
       ArrayList<Node> importStatements = new ArrayList<>();
       JSChunk importingChunk = chunkImportsEntry.getKey();
-      CompilerInput firstInput = importingChunk.getInput(0);
+      CompilerInput firstInput = importingChunk.getFirst();
       Node moduleBody = firstInput.getAstRoot(compiler).getFirstChild();
       checkState(moduleBody != null && moduleBody.isModuleBody());
 
@@ -251,7 +254,8 @@ final class ConvertChunksToESModules implements CompilerPass {
   }
 
   /** Find and return the module namespace name node in a dynamic import callback function */
-  public static Node getDynamicImportCallbackModuleNamespace(AbstractCompiler compiler, Node call) {
+  public static @Nullable Node getDynamicImportCallbackModuleNamespace(
+      AbstractCompiler compiler, Node call) {
     checkState(call.isCall());
     Node callbackFn = NodeUtil.getArgumentForCallOrNew(call, 0);
     if (callbackFn == null
@@ -310,14 +314,13 @@ final class ConvertChunksToESModules implements CompilerPass {
       }
       Node callbackFn = NodeUtil.getArgumentForCallOrNew(dynamicImportCallback, 0);
       Node callbackParamList = NodeUtil.getFunctionParameters(callbackFn);
-      Node importNamespaceParam =
-          astFactory.createName("$", JSTypeNative.UNKNOWN_TYPE).srcref(moduleNamespace);
+      Node importNamespaceParam = astFactory.createNameWithUnknownType("$").srcref(moduleNamespace);
       callbackParamList.addChildToFront(importNamespaceParam);
       compiler.reportChangeToEnclosingScope(importNamespaceParam);
 
       Node namespaceGetprop =
-          astFactory.createGetProp(
-              astFactory.createName("$", JSTypeNative.UNKNOWN_TYPE).srcref(moduleNamespace),
+          astFactory.createGetPropWithUnknownType(
+              astFactory.createNameWithUnknownType("$").srcref(moduleNamespace),
               moduleNamespace.getString());
 
       moduleNamespace.replaceWith(namespaceGetprop);
@@ -347,7 +350,7 @@ final class ConvertChunksToESModules implements CompilerPass {
     public void visitScript(NodeTraversal t, Node script) {
       checkState(script.isScript());
       JSChunk chunk = t.getChunk();
-      List<JSChunk> chunkDependencies = chunk.getDependencies();
+      ImmutableList<JSChunk> chunkDependencies = chunk.getDependencies();
 
       crossChunkExports.putIfAbsent(chunk, new LinkedHashSet<>());
 

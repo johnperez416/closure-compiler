@@ -18,7 +18,6 @@ package com.google.javascript.jscomp.instrumentation;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.javascript.jscomp.NodeTraversal;
 import com.google.javascript.jscomp.NodeUtil;
 import com.google.javascript.jscomp.instrumentation.CoverageInstrumentationPass.CoverageReach;
@@ -26,12 +25,8 @@ import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import java.util.Map;
 
-/**
- * This class implements a traversal to instrument an AST for code coverage.
- */
-@GwtIncompatible("FileInstrumentationData")
-class CoverageInstrumentationCallback extends
-    NodeTraversal.AbstractPostOrderCallback {
+/** This class implements a traversal to instrument an AST for code coverage. */
+class CoverageInstrumentationCallback implements NodeTraversal.Callback {
 
   private final Map<String, FileInstrumentationData> instrumentationData;
   private final CoverageReach reach;
@@ -137,9 +132,15 @@ class CoverageInstrumentationCallback extends
         .srcrefTreeIfMissing(srcref);
   }
 
+  @Override
+  public final boolean shouldTraverse(NodeTraversal nodeTraversal, Node n, Node parent) {
+    // Skip scripts that are marked with @nocoverage.
+    return !n.isScript() || n.getJSDocInfo() == null || !n.getJSDocInfo().isNoCoverage();
+  }
+
   /**
-   * Instruments the JS code by inserting appropriate nodes into the AST. The
-   * instrumentation logic is tuned to collect "line coverage" data only.
+   * Instruments the JS code by inserting appropriate nodes into the AST. The instrumentation logic
+   * is tuned to collect "line coverage" data only.
    */
   @Override
   public void visit(NodeTraversal traversal, Node node, Node parent) {

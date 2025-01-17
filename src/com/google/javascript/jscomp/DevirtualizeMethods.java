@@ -33,7 +33,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Rewrites prototype and static methods as global, free functions that take the receiver as their
@@ -258,7 +258,7 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
 
     // Exporting a method prevents rewrite.
     CodingConvention codingConvention = compiler.getCodingConvention();
-    if (codingConvention.isExported(name)) {
+    if (codingConvention.isExported(name, /* local= */ false)) {
       return false;
     }
 
@@ -360,14 +360,14 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
     //   - Rewriting all call-sites in a way that preserves exact ordering (e.g. using
     //     `ExpressionDecomposer`) has a significant code-size impact (circa 2018-11-19).
 
-    JSChunkGraph moduleGraph = compiler.getModuleGraph();
-    @Nullable JSChunk definitionModule = moduleForNode(definitionSite);
-    @Nullable JSChunk callModule = moduleForNode(access);
+    JSChunkGraph chunkGraph = compiler.getChunkGraph();
+    @Nullable JSChunk definitionModule = chunkForNode(definitionSite);
+    @Nullable JSChunk callModule = chunkForNode(access);
     if (definitionModule == callModule) {
       // Do nothing.
     } else if (callModule == null) {
       return false;
-    } else if (!moduleGraph.dependsOn(callModule, definitionModule)) {
+    } else if (!chunkGraph.dependsOn(callModule, definitionModule)) {
       return false;
     }
 
@@ -508,8 +508,7 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
     }
   }
 
-  @Nullable
-  private JSChunk moduleForNode(Node node) {
+  private @Nullable JSChunk chunkForNode(Node node) {
     Node script = NodeUtil.getEnclosingScript(node);
     CompilerInput input = compiler.getInput(script.getInputId());
     return input.getChunk();

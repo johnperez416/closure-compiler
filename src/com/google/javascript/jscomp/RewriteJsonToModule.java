@@ -22,7 +22,7 @@ import com.google.javascript.jscomp.deps.ModuleLoader;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -49,7 +49,7 @@ public class RewriteJsonToModule extends NodeTraversal.AbstractPostOrderCallback
    */
   public RewriteJsonToModule(AbstractCompiler compiler) {
     this.compiler = compiler;
-    this.packageJsonMainEntries = new HashMap<>();
+    this.packageJsonMainEntries = new LinkedHashMap<>();
   }
 
   public ImmutableMap<String, String> getPackageJsonMainEntries() {
@@ -87,7 +87,7 @@ public class RewriteJsonToModule extends NodeTraversal.AbstractPostOrderCallback
         break;
 
       case STRING_KEY:
-        if (!n.isQuotedString() || !n.hasOneChild()) {
+        if (!n.isQuotedStringKey() || !n.hasOneChild()) {
           compiler.report(JSError.make(n, JSON_UNEXPECTED_TOKEN));
         }
         break;
@@ -126,7 +126,7 @@ public class RewriteJsonToModule extends NodeTraversal.AbstractPostOrderCallback
 
     JSDocInfo.Builder jsdoc = JSDocInfo.builder();
     jsdoc.recordFileOverview("Suppresses undefined var goog error");
-    jsdoc.addSuppression("undefinedVars");
+    jsdoc.recordSuppression("undefinedVars");
     n.setJSDocInfo(jsdoc.build());
 
     Node jsonObject = n.getFirstFirstChild().detach();
@@ -141,7 +141,7 @@ public class RewriteJsonToModule extends NodeTraversal.AbstractPostOrderCallback
         IR.exprResult(IR.call(IR.getprop(IR.name("goog"), "provide"), IR.string(moduleName)))
             .srcrefTreeIfMissing(n));
 
-    String inputPath = t.getInput().getSourceFile().getOriginalPath();
+    String inputPath = t.getInput().getSourceFile().getName();
     if (inputPath.endsWith("/package.json") && jsonObject.isObjectLit()) {
       List<String> possibleMainEntries = compiler.getOptions().getPackageJsonEntryNames();
 

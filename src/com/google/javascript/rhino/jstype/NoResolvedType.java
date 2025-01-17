@@ -39,8 +39,10 @@
 
 package com.google.javascript.rhino.jstype;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+
 import com.google.common.collect.ImmutableList;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * An unresolved type that was forward declared. So we know it exists,
@@ -55,22 +57,19 @@ import javax.annotation.Nullable;
  * @author nicksantos@google.com (Nick Santos)
  */
 public final class NoResolvedType extends NoType {
-  /** The name originally used to reference this type, or {@code null} if none. */
-  @Nullable private String referenceName;
-  /**
-   * Any template arguments to this type, or {@code null} if none.
-   * This field is not used for JSCompiler's type checking; it is only needed by Clutz.
-   */
-  @Nullable private ImmutableList<JSType> templateTypes;
+  /** The name originally used to reference this type. */
+  private final String referenceName;
 
-  NoResolvedType(JSTypeRegistry registry) {
-    super(registry);
-  }
+  /**
+   * Any template arguments to this type, or {@code null} if none. This field is not used for
+   * JSCompiler's type checking; it is only needed by Clutz.
+   */
+  private @Nullable ImmutableList<JSType> templateTypes;
 
   NoResolvedType(
       JSTypeRegistry registry, String referenceName, ImmutableList<JSType> templateTypes) {
-    this(registry);
-    this.referenceName = referenceName;
+    super(registry);
+    this.referenceName = checkNotNull(referenceName);
     this.templateTypes = templateTypes;
   }
 
@@ -80,14 +79,12 @@ public final class NoResolvedType extends NoType {
   }
 
   @Override
-  @Nullable
-  public String getReferenceName() {
+  public @Nullable String getReferenceName() {
     return referenceName;
   }
 
   @Override
-  @Nullable
-  public ImmutableList<JSType> getTemplateTypes() {
+  public @Nullable ImmutableList<JSType> getTemplateTypes() {
     return templateTypes;
   }
 
@@ -103,6 +100,6 @@ public final class NoResolvedType extends NoType {
 
   @Override
   void appendTo(TypeStringBuilder sb) {
-   sb.append(sb.isForAnnotations() ? "?" : "NoResolvedType");
+    sb.append(sb.isForAnnotations() ? "?" : "NoResolvedType<" + referenceName + ">");
   }
 }

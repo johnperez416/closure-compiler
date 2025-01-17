@@ -18,9 +18,12 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Strings.emptyToNull;
 
 import com.google.auto.value.AutoValue;
+import com.google.common.base.Preconditions;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.javascript.rhino.Node;
 import java.io.Serializable;
-import javax.annotation.Nullable;
+import java.util.Objects;
+import org.jspecify.annotations.Nullable;
 
 /** Compile error description. */
 @AutoValue
@@ -33,8 +36,7 @@ public abstract class JSError implements Serializable {
   public abstract String getDescription();
 
   /** Name of the source */
-  @Nullable
-  public abstract String getSourceName();
+  public abstract @Nullable String getSourceName();
 
   /** One-indexed line number of the error location. */
   public abstract int getLineno();
@@ -42,17 +44,24 @@ public abstract class JSError implements Serializable {
   /** Zero-indexed character number of the error location. */
   public abstract int getCharno();
 
+  /** Length of the error region. */
+  public abstract int getLength();
+
   /** Node where the warning occurred. */
-  @Nullable
-  public abstract Node getNode();
+  public abstract @Nullable Node getNode();
 
   /** The default level, before any of the {@code WarningsGuard}s are applied. */
   public abstract CheckLevel getDefaultLevel();
 
+  /** Requirement that fails in the case of conformance violations. */
+  public abstract @Nullable Requirement getRequirement();
+
   private static final int DEFAULT_LINENO = -1;
   private static final int DEFAULT_CHARNO = -1;
-  private static final String DEFAULT_SOURCENAME = null;
-  private static final Node DEFAULT_NODE = null;
+  private static final int DEFAULT_LENGTH = 0;
+  private static final @Nullable String DEFAULT_SOURCENAME = null;
+  private static final @Nullable Node DEFAULT_NODE = null;
+  private static final @Nullable Requirement DEFAULT_REQUIREMENT = null;
 
   /**
    * Creates a JSError with no source information
@@ -61,14 +70,7 @@ public abstract class JSError implements Serializable {
    * @param arguments Arguments to be incorporated into the message
    */
   public static JSError make(DiagnosticType type, String... arguments) {
-    return new AutoValue_JSError(
-        type,
-        type.format(arguments),
-        DEFAULT_SOURCENAME,
-        DEFAULT_LINENO,
-        DEFAULT_CHARNO,
-        DEFAULT_NODE,
-        type.level);
+    return builder(type, arguments).build();
   }
 
   /**
@@ -82,28 +84,7 @@ public abstract class JSError implements Serializable {
    */
   public static JSError make(
       String sourceName, int lineno, int charno, DiagnosticType type, String... arguments) {
-    return new AutoValue_JSError(
-        type, type.format(arguments), sourceName, lineno, charno, DEFAULT_NODE, type.level);
-  }
-
-  /**
-   * Creates a JSError at a given source location
-   *
-   * @param sourceName The source file name
-   * @param lineno Line number with source file, or -1 if unknown
-   * @param charno Column number within line, or -1 for whole line.
-   * @param type The DiagnosticType
-   * @param arguments Arguments to be incorporated into the message
-   */
-  public static JSError make(
-      String sourceName,
-      int lineno,
-      int charno,
-      CheckLevel level,
-      DiagnosticType type,
-      String... arguments) {
-    return new AutoValue_JSError(
-        type, type.format(arguments), sourceName, lineno, charno, DEFAULT_NODE, level);
+    return builder(type, arguments).setSourceLocation(sourceName, lineno, charno).build();
   }
 
   /**
@@ -114,26 +95,139 @@ public abstract class JSError implements Serializable {
    * @param arguments Arguments to be incorporated into the message
    */
   public static JSError make(Node n, DiagnosticType type, String... arguments) {
-    return new AutoValue_JSError(
-        type,
-        type.format(arguments),
-        n.getSourceFileName(),
-        n.getLineno(),
-        n.getCharno(),
-        n,
-        type.level);
+    return builder(type, arguments).setNode(n).build();
   }
 
-  /** Creates a JSError from a file and Node position. */
-  public static JSError make(Node n, CheckLevel level, DiagnosticType type, String... arguments) {
-    return new AutoValue_JSError(
-        type,
-        type.format(arguments),
-        n.getSourceFileName(),
-        n.getLineno(),
-        n.getCharno(),
-        n,
-        level);
+  /**
+   * Creates a JSError from a file and Node position.
+   *
+   * @param start Determines the line and char position and source file name
+   * @param end Determines the length of the error region
+   * @param type The DiagnosticType
+   * @param arguments Arguments to be incorporated into the message
+   */
+  public static JSError make(Node start, Node end, DiagnosticType type, String... arguments) {
+    return builder(type, arguments).setNodeRange(start, end).build();
+  }
+
+  /**
+   * Creates a JSError from a requirement, file and Node position.
+   *
+   * @param requirement The conformance requirement that fails
+   * @param n Determines the line and char position and source file name
+   * @param type The DiagnosticType
+   * @param arguments Arguments to be incorporated into the message
+   */
+  public static JSError make(
+      Requirement requirement, Node n, DiagnosticType type, String... arguments) {
+    return builder(type, arguments).setNode(n).setRequirement(requirement).build();
+  }
+
+  static final class Builder {
+    private final DiagnosticType type;
+    private final String[] args;
+
+    private CheckLevel level;
+    private Node n = DEFAULT_NODE;
+    private String sourceName = DEFAULT_SOURCENAME;
+    private int lineno = DEFAULT_LINENO;
+    private int charno = DEFAULT_CHARNO;
+    private int length = DEFAULT_LENGTH;
+    private Requirement requirement = DEFAULT_REQUIREMENT;
+
+    private Builder(DiagnosticType type, String... args) {
+      this.type = type;
+      this.args = args;
+      this.level = type.level; // may be overwritten later
+    }
+
+    /**
+     * Sets the location where this error occurred.
+     *
+     * <p>Incompatible with {@link #setSourceLocation(String, int, int)}
+     */
+    @CanIgnoreReturnValue
+    Builder setNode(Node n) {
+      Preconditions.checkState(
+          Objects.equals(DEFAULT_SOURCENAME, this.sourceName),
+          "Cannot provide a Node when there's already a source name");
+      this.n = n;
+      this.sourceName = n.getSourceFileName();
+      this.lineno = n.getLineno();
+      this.charno = n.getCharno();
+      this.length = n.getLength();
+      return this;
+    }
+
+    Builder setNodeRange(Node start, Node end) {
+      Preconditions.checkState(
+          Objects.equals(DEFAULT_SOURCENAME, this.sourceName),
+          "Cannot provide a Node when there's already a source name");
+      this.n = start;
+      this.sourceName = n.getSourceFileName();
+      this.lineno = n.getLineno();
+      this.charno = n.getCharno();
+      int endOffset = end.getSourceOffset();
+      int startOffset = start.getSourceOffset();
+      if (endOffset != -1 && startOffset != -1) {
+        this.length = (end.getSourceOffset() + end.getLength()) - start.getSourceOffset();
+      }
+      return this;
+    }
+
+    /**
+     * Sets the default level, before any WarningGuards, of this JSError. Overwrites the default
+     * level of the DiagnosticType.
+     *
+     * <p>This method is rarely useful: prefer whenever possible to rely on the default level of the
+     * DiagnosticType.
+     */
+    @CanIgnoreReturnValue
+    Builder setLevel(CheckLevel level) {
+      this.level = Preconditions.checkNotNull(level);
+      return this;
+    }
+
+    /** Sets the requirement that fails in the case of conformance violations. */
+    @CanIgnoreReturnValue
+    Builder setRequirement(Requirement requirement) {
+      this.requirement = Preconditions.checkNotNull(requirement);
+      return this;
+    }
+
+    /**
+     * Sets the location where this error occurred
+     *
+     * <p>Incompatible with {@link #setNode(Node)}
+     *
+     * @param sourceName The source file name
+     * @param lineno Line number with source file, or -1 if unknown
+     * @param charno Column number within line, or -1 for whole line.
+     */
+    @CanIgnoreReturnValue
+    Builder setSourceLocation(String sourceName, int lineno, int charno) {
+      Preconditions.checkState(
+          this.n == DEFAULT_NODE, "Cannot provide a source location when there is already a Node");
+      this.sourceName = sourceName;
+      this.lineno = lineno;
+      this.charno = charno;
+      return this;
+    }
+
+    JSError build() {
+      return new AutoValue_JSError(
+          type, type.format(args), sourceName, lineno, charno, length, n, level, requirement);
+    }
+  }
+
+  /**
+   * Creates a new builder.
+   *
+   * @param type the associated DiagnosticType
+   * @param arguments formatting arguments used to format the DiagnosticType's description
+   */
+  static Builder builder(DiagnosticType type, String... arguments) {
+    return new Builder(type, arguments);
   }
 
   /** @return the default rendering of an error as text. */
@@ -162,7 +256,7 @@ public abstract class JSError implements Serializable {
    *
    * @return the formatted message or {@code null}
    */
-  public final String format(CheckLevel level, MessageFormatter formatter) {
+  public final @Nullable String format(CheckLevel level, MessageFormatter formatter) {
     switch (level) {
       case ERROR:
         return formatter.formatError(this);
@@ -178,11 +272,6 @@ public abstract class JSError implements Serializable {
   /** @return the offset of the region the Error applies to, or -1 if the offset is unknown. */
   public final int getNodeSourceOffset() {
     return this.getNode() != null ? this.getNode().getSourceOffset() : -1;
-  }
-
-  /** @return the length of the region the Error applies to, or 0 if the length is unknown. */
-  public final int getNodeLength() {
-    return this.getNode() != null ? this.getNode().getLength() : 0;
   }
 
   /** Alias for {@link #getLineno()}. */

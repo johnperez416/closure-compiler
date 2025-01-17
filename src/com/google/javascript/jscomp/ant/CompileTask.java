@@ -41,11 +41,10 @@ import com.google.javascript.jscomp.SourceMap.PrefixLocationMapping;
 import com.google.javascript.jscomp.WarningLevel;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.charset.Charset;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -376,7 +375,7 @@ public final class CompileTask
           try {
             this.outputWrapper = Files.asCharSource(this.outputWrapperFile, UTF_8).read();
           } catch (Exception e) {
-            throw new BuildException("Invalid output_wrapper_file specified.");
+            throw new BuildException("Invalid output_wrapper_file specified.", e);
           }
         }
 
@@ -409,7 +408,7 @@ public final class CompileTask
   }
 
   private void flushSourceMap(SourceMap sourceMap) {
-    try (FileWriter out = new FileWriter(sourceMapOutputFile)) {
+    try (Writer out = Files.newWriter(sourceMapOutputFile, UTF_8)) {
       sourceMap.appendTo(out, outputFile.getName());
     } catch (IOException e) {
       throw new BuildException("Cannot write sourcemap to file.", e);
@@ -536,10 +535,8 @@ public final class CompileTask
   }
 
   /**
-   * Converts project properties beginning with the replacement prefix
-   * into Compiler {@code @define} replacements.
-   *
-   * @param options
+   * Converts project properties beginning with the replacement prefix into Compiler {@code @define}
+   * replacements.
    */
   private void convertPropertiesMap(CompilerOptions options) {
     @SuppressWarnings("unchecked")
@@ -569,7 +566,7 @@ public final class CompileTask
       String key, Object value) {
     boolean success = false;
 
-    if (value instanceof String) {
+    if (value instanceof String string) {
       final boolean isTrue = "true".equals(value);
       final boolean isFalse = "false".equals(value);
 
@@ -577,23 +574,23 @@ public final class CompileTask
         options.setDefineToBooleanLiteral(key, isTrue);
       } else {
         try {
-          double dblTemp = Double.parseDouble((String) value);
+          double dblTemp = Double.parseDouble(string);
           options.setDefineToDoubleLiteral(key, dblTemp);
         } catch (NumberFormatException nfe) {
           // Not a number, assume string
-          options.setDefineToStringLiteral(key, (String) value);
+          options.setDefineToStringLiteral(key, string);
         }
       }
 
       success = true;
-    } else if (value instanceof Boolean) {
-      options.setDefineToBooleanLiteral(key, (Boolean) value);
+    } else if (value instanceof Boolean b) {
+      options.setDefineToBooleanLiteral(key, b);
       success = true;
-    } else if (value instanceof Integer) {
-      options.setDefineToNumberLiteral(key, (Integer) value);
+    } else if (value instanceof Integer i) {
+      options.setDefineToNumberLiteral(key, i);
       success = true;
-    } else if (value instanceof Double) {
-      options.setDefineToDoubleLiteral(key, (Double) value);
+    } else if (value instanceof Double d) {
+      options.setDefineToDoubleLiteral(key, d);
       success = true;
     }
 
@@ -644,7 +641,8 @@ public final class CompileTask
     while (iter.hasNext()) {
       FileResource fr = (FileResource) iter.next();
       // Construct path to file, relative to current working directory.
-      java.nio.file.Path path = Paths.get("").toAbsolutePath().relativize(fr.getFile().toPath());
+      java.nio.file.Path path =
+          java.nio.file.Path.of("").toAbsolutePath().relativize(fr.getFile().toPath());
       files.add(SourceFile.fromPath(path, Charset.forName(encoding)));
     }
     return files;
@@ -708,16 +706,14 @@ public final class CompileTask
     long lastModified = 0;
 
     for (Object entry : fileLists) {
-      if (entry instanceof FileList) {
-        FileList list = (FileList) entry;
+      if (entry instanceof FileList list) {
 
         for (String fileName : list.getFiles(this.getProject())) {
           File path = list.getDir(this.getProject());
           File file = new File(path, fileName);
           lastModified = max(getLastModifiedTime(file), lastModified);
         }
-      } else if (entry instanceof Path) {
-        Path path = (Path) entry;
+      } else if (entry instanceof Path path) {
         for (String src : path.list()) {
           File file = new File(src);
           lastModified = max(getLastModifiedTime(file), lastModified);

@@ -18,7 +18,6 @@ package com.google.javascript.jscomp.instrumentation.reporter;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.CharStreams;
 import com.google.gson.Gson;
@@ -29,7 +28,7 @@ import java.io.IOException;
 import java.io.Writer;
 import java.lang.reflect.Type;
 import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.Map;
 import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
@@ -41,7 +40,6 @@ import org.kohsuke.args4j.Option;
  * instrumented production code. It will then take these inputs and generate a single JSON which
  * provides a detailed breakdown of each instrumentation point.
  */
-@GwtIncompatible
 final class ProductionInstrumentationReporter {
 
   @Option(
@@ -76,7 +74,7 @@ final class ProductionInstrumentationReporter {
 
   /** This function reads a file at the given filePath and converts the contents into a string. */
   public static String readFile(String filePath) throws IOException {
-    return CharStreams.toString(Files.newBufferedReader(Paths.get(filePath), UTF_8));
+    return CharStreams.toString(Files.newBufferedReader(Path.of(filePath), UTF_8));
   }
 
   /**
@@ -109,7 +107,7 @@ final class ProductionInstrumentationReporter {
     File myObj = new File(fileName);
     myObj.createNewFile();
 
-    try (Writer myWriter = Files.newBufferedWriter(Paths.get(fileName), UTF_8)) {
+    try (Writer myWriter = Files.newBufferedWriter(Path.of(fileName), UTF_8)) {
       myWriter.write(fileContents);
     }
   }

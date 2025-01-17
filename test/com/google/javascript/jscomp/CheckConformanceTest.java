@@ -629,6 +629,59 @@ public final class CheckConformanceTest extends CompilerTestCase {
   }
 
   @Test
+  public void testBannedEnhance() {
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_ENHANCE\n"
+            + "  value: '{some.banned.namespace}'\n"
+            + "  value: '{another.banned.namespace}'\n"
+            + "  error_message: 'Enhanced namespace is not allowed.'\n"
+            + "}";
+    String violationMessage =
+        "Violation: Enhanced namespace is not allowed.\n" + "The enhanced namespace ";
+
+    String ban1 = lines("/**", " * @enhance {some.banned.namespace}", " */");
+    testWarning(
+        ban1,
+        CheckConformance.CONFORMANCE_VIOLATION,
+        violationMessage + "\"{some.banned.namespace}\"");
+
+    String ban2 = lines("/**", " * @enhance {another.banned.namespace}", " */");
+    testWarning(
+        ban2,
+        CheckConformance.CONFORMANCE_VIOLATION,
+        violationMessage + "\"{another.banned.namespace}\"");
+
+    String allow1 = lines("/**", " * @enhance {some.allowed.namespace}", " */");
+    testNoWarning(allow1);
+
+    String allow2 =
+        lines("/**", " * @fileoverview no enhance annotation should always pass.", " */");
+    testNoWarning(allow2);
+  }
+
+  @Test
+  public void testBannedModsRegex() {
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_MODS_REGEX\n"
+            + "  value: '.+_bar$'\n"
+            + "  error_message: 'Modding namespaces ending in _bar is NOT allowed.'\n"
+            + "}";
+    String violationMessage = "Violation: Modding namespaces ending in _bar is NOT allowed.";
+
+    String ban = lines("/**", " * @mods {ns.foo_bar}", " * @modName {ns.foo_bar_baz}", " */");
+    testWarning(ban, CheckConformance.CONFORMANCE_VIOLATION, violationMessage);
+
+    String allow1 = lines("/**", " * @mods {ns.foo}", " * @modName {ns.foo_bar}", " */");
+    testNoWarning(allow1);
+
+    String allow2 =
+        lines("/**", " * @fileoverview no enhance annotation should always pass.", " */");
+    testNoWarning(allow2);
+  }
+
+  @Test
   public void testBannedNameCall() {
     configuration =
         "requirement: {\n"
@@ -915,6 +968,15 @@ public final class CheckConformanceTest extends CompilerTestCase {
     testNoWarning(srcs(inputs));
   }
 
+  private void testConformance(String src1, String src2, String src3) {
+    ImmutableList<SourceFile> inputs =
+        ImmutableList.of(
+            SourceFile.fromCode("SRC1", src1),
+            SourceFile.fromCode("SRC2", src2),
+            SourceFile.fromCode("SRC3", src3));
+    testNoWarning(srcs(inputs));
+  }
+
   private void testConformance(String src1, String src2, DiagnosticType warning) {
     ImmutableList<SourceFile> inputs =
         ImmutableList.of(SourceFile.fromCode("SRC1", src1), SourceFile.fromCode("SRC2", src2));
@@ -939,6 +1001,13 @@ public final class CheckConformanceTest extends CompilerTestCase {
         lines("/** @constructor */ function D() {}", "/** @type {string} */", "D.prototype.p;");
 
     testConformance(cDecl, dDecl);
+    String typedefDecl =
+        lines(
+            "/** @typedef {{p: string}} */ let E;",
+            "/** @const {!E} */ const value = {p: 'foo'};",
+            "/** @type {string} */ const s = value.p;");
+
+    testConformance(cDecl, dDecl, typedefDecl);
   }
 
   @Test
@@ -1252,8 +1321,6 @@ public final class CheckConformanceTest extends CompilerTestCase {
 
   @Test
   public void testBannedPropertyWhitelist_recordType() {
-    // TODO(b/76025401): remove the enableTranspile() call once we natively typecheck classes
-    enableTranspile();
     configuration =
         lines(
             "requirement: {",
@@ -1291,8 +1358,6 @@ public final class CheckConformanceTest extends CompilerTestCase {
 
   @Test
   public void testBannedPropertyAllowlist_recordType() {
-    // TODO(b/76025401): remove the enableTranspile() call once we natively typecheck classes
-    enableTranspile();
     configuration =
         lines(
             "requirement: {",
@@ -1395,6 +1460,128 @@ public final class CheckConformanceTest extends CompilerTestCase {
     testConformance(
         declarations,
         "var c = new SC(); c.p = 'boo';",
+        CheckConformance.CONFORMANCE_POSSIBLE_VIOLATION);
+  }
+
+  @Test
+  public void testBannedPropertyWhitelist_bundledNamespacedType() {
+    disableRewriteClosureCode();
+
+    configuration =
+        lines(
+            "requirement: {",
+            "  type: BANNED_PROPERTY",
+            "  value: 'test.bns.BC.prototype.p'",
+            "  error_message: 'test.bns.BC.p is not allowed'",
+            "  whitelist: 'SRC1'",
+            "}");
+
+    String declarations =
+        lines(
+            "/** @fileoverview @typeSummary */",
+            "goog.loadModule(function(exports) {",
+            "goog.module('test.bns');",
+            "/** @constructor */ function SBC() {}",
+            "exports.SBC = SBC;",
+            "/** @constructor @extends {SBC} */",
+            "BC = function() {}",
+            "/** @type {string} */",
+            "BC.prototype.p;",
+            "exports.BC = BC;",
+            "/** @constructor */ function D() {}",
+            "exports.D = D;",
+            "/** @type {string} */",
+            "D.prototype.p;",
+            "return exports;",
+            "});");
+
+    testConformance(
+        declarations,
+        lines(
+            "goog.module('test');",
+            "const {D} = goog.require('test.bns');",
+            "var d = new D();",
+            "d.p = 'boo';"));
+
+    // This case should be a certain violation, but the compiler cannot figure out that the imported
+    // type is the same as the one found from the type registry.
+    testConformance(
+        declarations,
+        lines(
+            "goog.module('test');",
+            "const {BC} = goog.require('test.bns');",
+            "var bc = new BC();",
+            "bc.p = 'boo';"),
+        CheckConformance.CONFORMANCE_POSSIBLE_VIOLATION);
+
+    testConformance(
+        declarations,
+        lines(
+            "goog.module('test');",
+            "const bns = goog.require('test.bns');",
+            "var bc = new bns.SBC();",
+            "bc.p = 'boo';"),
+        CheckConformance.CONFORMANCE_POSSIBLE_VIOLATION);
+  }
+
+  @Test
+  public void testBannedPropertyAllowlist_bundledNamespacedType() {
+    disableRewriteClosureCode();
+
+    configuration =
+        lines(
+            "requirement: {",
+            "  type: BANNED_PROPERTY",
+            "  value: 'test.bns.BC.prototype.p'",
+            "  error_message: 'test.bns.BC.p is not allowed'",
+            "  allowlist: 'SRC1'",
+            "}");
+
+    String declarations =
+        lines(
+            "/** @fileoverview @typeSummary */",
+            "goog.loadModule(function(exports) {",
+            "goog.module('test.bns');",
+            "/** @constructor */ function SBC() {}",
+            "exports.SBC = SBC;",
+            "/** @constructor @extends {SBC} */",
+            "BC = function() {}",
+            "/** @type {string} */",
+            "BC.prototype.p;",
+            "exports.BC = BC;",
+            "/** @constructor */ function D() {}",
+            "exports.D = D;",
+            "/** @type {string} */",
+            "D.prototype.p;",
+            "return exports;",
+            "});");
+
+    testConformance(
+        declarations,
+        lines(
+            "goog.module('test');",
+            "const {D} = goog.require('test.bns');",
+            "var d = new D();",
+            "d.p = 'boo';"));
+
+    // This case should be a certain violation, but the compiler cannot figure out that the imported
+    // type is the same as the one found from the type registry.
+    testConformance(
+        declarations,
+        lines(
+            "goog.module('test');",
+            "const {BC} = goog.require('test.bns');",
+            "var bc = new BC();",
+            "bc.p = 'boo';"),
+        CheckConformance.CONFORMANCE_POSSIBLE_VIOLATION);
+
+    testConformance(
+        declarations,
+        lines(
+            "goog.module('test');",
+            "const bns = goog.require('test.bns');",
+            "var bc = new bns.SBC();",
+            "bc.p = 'boo';"),
         CheckConformance.CONFORMANCE_POSSIBLE_VIOLATION);
   }
 
@@ -1571,6 +1758,153 @@ public final class CheckConformanceTest extends CompilerTestCase {
 
     testWarning(
         declarations + "var c = new C(); use(c['p']);", CheckConformance.CONFORMANCE_VIOLATION);
+  }
+
+  @Test
+  public void testBannedStringRegexMissingValues() {
+    allowSourcelessWarnings();
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    testError(
+        "anything;",
+        CheckConformance.INVALID_REQUIREMENT_SPEC,
+        "Invalid requirement. Reason: missing value\n"
+            + "Requirement spec:\n"
+            + "error_message: \"Empty string not allowed\"\n"
+            + "type: BANNED_STRING_REGEX\n");
+  }
+
+  @Test
+  public void testBannedStringRegexEmpty() {
+    allowSourcelessWarnings();
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  value: ' '\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    testError(
+        "anything;",
+        CheckConformance.INVALID_REQUIREMENT_SPEC,
+        "Invalid requirement. Reason: empty strings or whitespace are not allowed\n"
+            + "Requirement spec:\n"
+            + "error_message: \"Empty string not allowed\"\n"
+            + "type: BANNED_STRING_REGEX\n"
+            + "value: \" \"\n");
+  }
+
+  @Test
+  public void testBannedStringRegexMultipleValuesWithEmpty() {
+    allowSourcelessWarnings();
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  value: 'things'\n"
+            + "  value: ' '\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    testError(
+        "anything;",
+        CheckConformance.INVALID_REQUIREMENT_SPEC,
+        "Invalid requirement. Reason: empty strings or whitespace are not allowed\n"
+            + "Requirement spec:\n"
+            + "error_message: \"Empty string not allowed\"\n"
+            + "type: BANNED_STRING_REGEX\n"
+            + "value: \"things\"\n"
+            + "value: \" \"\n");
+  }
+
+  @Test
+  public void testBannedStringRegex1() {
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  value: '.*some-attr.*'\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    String declarations = "let dom = '<div>sample dom template content</div>';";
+
+    testNoWarning(declarations);
+
+    testWarning(
+        declarations + "let moredom = '<p some-attr=\"testval\">reflected!</p>';",
+        CheckConformance.CONFORMANCE_VIOLATION);
+  }
+
+  @Test
+  public void testBannedStringRegex2() {
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  value: '.*things.*'\n"
+            + "  value: 'stuff.*'\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    String code =
+        "/** @constructor */\n"
+            + "function Base() {}; Base.prototype.m;\n"
+            + "/** @constructor @extends {Base} */\n"
+            + "function Sub() {}\n";
+    String stuff = "var b = 'stuff and what not';\n";
+    String things = "var s = 'special things';\n";
+
+    testNoWarning(code);
+
+    testWarning(code + stuff, CheckConformance.CONFORMANCE_VIOLATION);
+
+    testWarning(code + things, CheckConformance.CONFORMANCE_VIOLATION);
+  }
+
+  @Test
+  public void testBannedStringRegexExactMatch() {
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  value: 'stuff'\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    String code =
+        "/** @constructor */\n"
+            + "function Base() {}; Base.prototype.m;\n"
+            + "/** @constructor @extends {Base} */\n"
+            + "function Sub() {}\n";
+    String noMatch = "var b = ' stuff ';\n";
+    String shouldMatch = "var s = 'stuff';\n";
+
+    testNoWarning(code + noMatch);
+
+    testWarning(code + shouldMatch, CheckConformance.CONFORMANCE_VIOLATION);
+  }
+
+  @Test
+  public void testBannedStringTemplateLiteral1() {
+    configuration =
+        "requirement: {\n"
+            + "  type: BANNED_STRING_REGEX\n"
+            + "  value: '.*good'\n"
+            + "  error_message: 'Empty string not allowed'\n"
+            + "}";
+
+    String code =
+        "/** @constructor */\n"
+            + "function Base() {}; Base.prototype.m;\n"
+            + "/** @constructor @extends {Base} */\n"
+            + "function Sub() {}\n";
+    String noMatch = "var b = `cheesy goodness`;\n";
+    String shouldMatch = "var b = `cheesy good`;\n";
+
+    testNoWarning(code + noMatch);
+
+    testWarning(code + shouldMatch, CheckConformance.CONFORMANCE_VIOLATION);
   }
 
   @Test
@@ -2066,6 +2400,18 @@ public final class CheckConformanceTest extends CompilerTestCase {
     testNoWarning("function f() {goog.asserts.assertInstanceof(this, Error);}");
   }
 
+  @Test
+  public void testCustomBanUnknownThis_allowsTs() {
+    configuration =
+        "requirement: {\n"
+            + "  type: CUSTOM\n"
+            + "  java_class: 'com.google.javascript.jscomp.ConformanceRules$BanUnknownThis'\n"
+            + "  error_message: 'BanUnknownThis Message'\n"
+            + "}";
+
+    testNoWarning(srcs(SourceFile.fromCode("file.closure.js", "function f() {alert(this);}")));
+  }
+
   private static String config(String rule, String message, String... fields) {
     String result = "requirement: {\n" + "  type: CUSTOM\n" + "  java_class: '" + rule + "'\n";
     for (String field : fields) {
@@ -2356,7 +2702,7 @@ public final class CheckConformanceTest extends CompilerTestCase {
   }
 
   @Test
-  public void testCustomBanUnknownProp_GetPropInDestructuringDoesntCauseSpuriousWarning() {
+  public void testCustomBanUnknownProp_getPropInDestructuringDoesntCauseSpuriousWarning() {
     configuration =
         config(rule("BanUnknownTypedClassPropsReferences"), "My rule message", value("String"));
     test(
@@ -2546,35 +2892,6 @@ public final class CheckConformanceTest extends CompilerTestCase {
   }
 
   @Test
-  public void testRequireFileoverviewVisibility() {
-    configuration =
-        "requirement: {\n"
-            + "  type: CUSTOM\n"
-            + "  java_class: 'com.google.javascript.jscomp.ConformanceRules$"
-            + "RequireFileoverviewVisibility'\n"
-            + "  error_message: 'RequireFileoverviewVisibility Message'\n"
-            + "}";
-
-    testWarning(
-        "var foo = function() {};",
-        CheckConformance.CONFORMANCE_VIOLATION,
-        "Violation: RequireFileoverviewVisibility Message");
-
-    testWarning(
-        "/**\n" + "  * @fileoverview\n" + "  */\n" + "var foo = function() {};",
-        CheckConformance.CONFORMANCE_VIOLATION,
-        "Violation: RequireFileoverviewVisibility Message");
-
-    testWarning(
-        "/**\n" + "  * @package\n" + "  */\n" + "var foo = function() {};",
-        CheckConformance.CONFORMANCE_VIOLATION,
-        "Violation: RequireFileoverviewVisibility Message");
-
-    testNoWarning(
-        "/**\n" + "  * @fileoverview\n" + "  * @package\n" + "  */\n" + "var foo = function() {};");
-  }
-
-  @Test
   public void testBanGlobalVarsInEs6Module() {
     // ES6 modules cannot be type checked yet
     disableTypeCheck();
@@ -2604,6 +2921,25 @@ public final class CheckConformanceTest extends CompilerTestCase {
         "goog.forwardDeclare('Foo'); /** @param {Foo} a */ function f(a) {a.foo()};",
         CheckConformance.CONFORMANCE_VIOLATION,
         "Violation: BanUnresolvedType Message\nReference to type 'Foo' never resolved.");
+
+    testWarning(
+        "goog.forwardDeclare('Foo'); /** @type {Foo} */ var f = makeFoo(); f.foo();",
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanUnresolvedType Message\nReference to type 'Foo' never resolved.");
+
+    test(
+        srcs(
+            lines(
+                "goog.forwardDeclare('Foo');",
+                "goog.forwardDeclare('Bar');",
+                "/** @param {?Foo|Bar} foobar */",
+                "function f(foobar) {",
+                "  return foobar.m();",
+                "}")),
+        warning(CheckConformance.CONFORMANCE_VIOLATION)
+            .withMessage(
+                "Violation: BanUnresolvedType Message\n"
+                    + "Reference to type 'Foo|Bar' never resolved."));
 
     testNoWarning(
         lines(
@@ -2639,6 +2975,39 @@ public final class CheckConformanceTest extends CompilerTestCase {
             "goog.forwardDeclare('Foo'); /** @return {!Foo} */ var f;", //
             "f();"),
         CheckConformance.CONFORMANCE_VIOLATION);
+
+    test(
+        srcs(
+            lines(
+                "goog.forwardDeclare('Foo');",
+                "goog.forwardDeclare('Bar');",
+                "/**",
+                " * @param {?Foo} foo",
+                " * @param {?Bar} bar",
+                " */",
+                "function f(foo, bar) {",
+                "  return foo || bar;",
+                "}")),
+        warning(CheckConformance.CONFORMANCE_VIOLATION)
+            .withMessage(
+                "Violation: StrictBanUnresolvedType Message\n"
+                    + "Reference to type 'Foo' never resolved."),
+        warning(CheckConformance.CONFORMANCE_VIOLATION)
+            .withMessage(
+                "Violation: StrictBanUnresolvedType Message\n"
+                    + "Reference to type 'Bar' never resolved."),
+        warning(CheckConformance.CONFORMANCE_VIOLATION)
+            .withMessage(
+                "Violation: StrictBanUnresolvedType Message\n"
+                    + "Reference to type 'Foo' never resolved."),
+        warning(CheckConformance.CONFORMANCE_VIOLATION)
+            .withMessage(
+                "Violation: StrictBanUnresolvedType Message\n"
+                    + "Reference to type 'Bar|Foo' never resolved."),
+        warning(CheckConformance.CONFORMANCE_VIOLATION)
+            .withMessage(
+                "Violation: StrictBanUnresolvedType Message\n"
+                    + "Reference to type 'Bar' never resolved."));
   }
 
   @Test
@@ -2832,9 +3201,8 @@ public final class CheckConformanceTest extends CompilerTestCase {
 
   @Test
   public void testRequireUseStrictEs6Module() {
-    // TODO(b/76025401): remove the enableTranspile() call once we natively typecheck classes
-    enableTranspile();
     configuration = config(rule("RequireUseStrict"), "My rule message");
+    enableRewriteEsModules();
 
     testNoWarning("export var x = 2;");
   }
@@ -2887,6 +3255,145 @@ public final class CheckConformanceTest extends CompilerTestCase {
 
     testNoWarning("goog.dom.createElement('iframe');");
     testNoWarning("goog.dom.createElement(goog.dom.TagName.SCRIPT);");
+  }
+
+  private String getBannedNonLiteralArgsConfiguration() {
+    return lines(
+        "requirement: {",
+        "  type: CUSTOM",
+        "  java_class:'com.google.javascript.jscomp.ConformanceRules$BanNonLiteralArgsToGoogStringConstFrom'",
+        "  error_message: 'BanNonLiteralArgsToGoogStringConstFrom Message'",
+        "}");
+  }
+
+  @Test
+  public void testBanNonLiteralArgsToGoogStringConstFrom_directCall() {
+    configuration = getBannedNonLiteralArgsConfiguration();
+
+    // test direct calls to goog.string.Const.from
+    testNoWarning("goog.string.Const.from('foo');");
+    testNoWarning("goog.string.Const.from(`foo`);");
+
+    testWarning(
+        "const foo = 42; goog.string.Const.from(foo);",
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanNonLiteralArgsToGoogStringConstFrom Message");
+    testWarning(
+        "const foo = 42; goog.string.Const.from(`literal_with_interpolation_${foo}`);",
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanNonLiteralArgsToGoogStringConstFrom Message");
+  }
+
+  @Test
+  public void testBanNonLiteralArgsToGoogStringConstFrom_alias() {
+    configuration = getBannedNonLiteralArgsConfiguration();
+
+    // test aliases
+    testNoWarning("const foo = goog.string.Const.from; foo('foo');");
+    testWarning(
+        "const foo = goog.string.Const.from; const bar = ''; foo(bar);",
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanNonLiteralArgsToGoogStringConstFrom Message");
+
+    // test alias of alias
+    testNoWarning("const foo = goog.string.Const.from; const bar = foo; bar('foo');");
+    // this should be a warning, but it isn't.
+    testNoWarning("const foo = goog.string.Const.from; const bar = foo; const baz = ''; bar(baz);");
+  }
+
+  @Test
+  public void testBanNonLiteralArgsToGoogStringConstFrom_googRequire_noAlias() {
+    configuration = getBannedNonLiteralArgsConfiguration();
+
+    Externs externs =
+        externs(
+            lines(
+                DEFAULT_EXTERNS,
+                lines(
+                    "goog.provide('goog.string.Const');",
+                    "/** @constructor */ goog.string.Const = function() {};",
+                    "goog.string.Const.from = function(x) {};")));
+    testNoWarning(
+        externs,
+        srcs(
+            lines(
+                "goog.module('test')",
+                "goog.require('goog.string.Const'); ",
+                "goog.string.Const.from('');")));
+
+    testWarning(
+        externs,
+        srcs(
+            lines(
+                "goog.module('test')",
+                "goog.require('goog.string.Const'); ",
+                "const bar = '';",
+                "goog.string.Const.from(bar);")),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanNonLiteralArgsToGoogStringConstFrom Message");
+  }
+
+  @Test
+  public void testBanNonLiteralArgsToGoogStringConstFrom_googRequired_localAlias() {
+    configuration = getBannedNonLiteralArgsConfiguration();
+
+    Externs externs =
+        externs(
+            lines(
+                DEFAULT_EXTERNS,
+                lines(
+                    "goog.provide('goog.string.Const');",
+                    "/** @constructor */ goog.string.Const = function() {};",
+                    "goog.string.Const.from = function(x) {};")));
+    testNoWarning(
+        externs,
+        srcs(
+            lines(
+                "goog.module('test')",
+                "const const1 = goog.require('goog.string.Const'); ",
+                "const1.from('');")));
+
+    testWarning(
+        externs,
+        srcs(
+            lines(
+                "goog.module('test')",
+                "const const1 = goog.require('goog.string.Const'); ",
+                "const bar = '';",
+                "const1.from(bar);")),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanNonLiteralArgsToGoogStringConstFrom Message");
+  }
+
+  @Test
+  public void testBanNonLiteralArgsToGoogStringConstFrom_googRequired_destructuringImport() {
+    configuration = getBannedNonLiteralArgsConfiguration();
+
+    Externs externs =
+        externs(
+            lines(
+                DEFAULT_EXTERNS,
+                lines(
+                    "goog.provide('goog.string.Const');",
+                    "/** @constructor */ goog.string.Const = function() {};",
+                    "goog.string.Const.from = function(x) {};")));
+    testNoWarning(
+        externs,
+        srcs(
+            lines(
+                "goog.module('test')",
+                "const {from} = goog.require('goog.string.Const'); ",
+                "from('');")));
+    testWarning(
+        externs,
+        srcs(
+            lines(
+                "goog.module('test')",
+                "const {from} = goog.require('goog.string.Const'); ",
+                "const bar = '';",
+                "from(bar);")),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanNonLiteralArgsToGoogStringConstFrom Message");
   }
 
   @Test
@@ -3134,14 +3641,16 @@ public final class CheckConformanceTest extends CompilerTestCase {
   }
 
   @Test
-  public void testBanSetAttribute() {
+  public void testBanElementSetAttribute() {
     configuration =
         lines(
             "requirement: {\n",
             "  type: CUSTOM\n",
             "  value: 'src'\n",
             "  value: 'HREF'\n",
-            "  java_class: 'com.google.javascript.jscomp.ConformanceRules$BanSetAttribute'\n",
+            "  java_class:"
+                + " 'com.google.javascript.jscomp.ConformanceRules$BanElementSetAttribute'\n",
+            "  report_loose_type_violations: false\n",
             "  error_message: 'BanSetAttribute Message'\n",
             "}");
 
@@ -3165,12 +3674,349 @@ public final class CheckConformanceTest extends CompilerTestCase {
 
     testWarning(
         externs(externs),
+        srcs("(new HTMLScriptElement).setAttributeNS(null, 'SRc', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement)['SRc'] = 'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement)['href'] = 'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testNoWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttributeNS('ns', 'data-random', 'xxx')"));
+
+    testNoWarning(
+        externs(externs), srcs("(new HTMLScriptElement).setAttribute('data-random', 'xxx')"));
+
+    testNoWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttributeNS(null, 'data-random', 'xxx')"));
+
+    testNoWarning(externs(externs), srcs("(new HTMLScriptElement)['innerHTML'] = 'xxx';"));
+
+    testNoWarning(
+        externs(externs), srcs("var attr = 'unknown'; (new HTMLScriptElement)[attr] =  'xxx';"));
+
+    testNoWarning(
+        externs(externs),
+        srcs("var attr = 'unknown'; (new HTMLScriptElement).setAttributeNS(null, attr, 'xxx')"));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            "/** @param {string|null} attr */\n"
+                + "function foo(attr) { (new HTMLScriptElement)[attr] =  'xxx'; }"));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "const foo = 'safe';",
+                "var bar = foo;",
+                "(new HTMLScriptElement).setAttribute(bar, 'xxx');")));
+
+    testNoWarning(externs(externs), srcs("(new HTMLScriptElement)['data-random'] = 'xxx';"));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "const foo = 'safe';",
+                "const bar = foo;",
+                "(new HTMLScriptElement).setAttribute(bar, 'xxx');")));
+  }
+
+  @Test
+  public void testBanElementSetAttributeLoose() {
+    configuration =
+        lines(
+            "requirement: {\n",
+            "  type: CUSTOM\n",
+            "  value: 'src'\n",
+            "  value: 'HREF'\n",
+            "  java_class:"
+                + " 'com.google.javascript.jscomp.ConformanceRules$BanElementSetAttribute'\n",
+            "  error_message: 'BanSetAttribute Message'\n",
+            "  report_loose_type_violations: true\n",
+            "}");
+
+    String externs =
+        lines(
+            DEFAULT_EXTERNS,
+            "/** @constructor */ function Element() {}",
+            "/** @constructor @extends {Element} */ function HTMLScriptElement() {}\n");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttribute('SRc', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttribute('href', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttributeNS(null, 'SRc', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttributeNS('ns', 'data-random', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
         srcs("var attr = 'unknown'; (new HTMLScriptElement).setAttributeNS(null, attr, 'xxx')"),
         CheckConformance.CONFORMANCE_VIOLATION,
         "Violation: BanSetAttribute Message");
 
     testNoWarning(
         externs(externs), srcs("(new HTMLScriptElement).setAttribute('data-random', 'xxx')"));
+
+    testNoWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).setAttributeNS(null, 'data-random', 'xxx')"));
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement)['SRc'] = 'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement)['src'] = 'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement)['href'] = 'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement)['innerHTML'] = 'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testNoWarning(
+        externs(externs), srcs("const attr = 'unknown'; (new HTMLScriptElement)[attr] =  'xxx';"));
+
+    testWarning(
+        externs(externs),
+        srcs("var attr = 'unknown'; (new HTMLScriptElement)[attr] =  'xxx';"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs(
+            "/** @param {string|null} attr */\n"
+                + "function foo(attr) { (new HTMLScriptElement)[attr] =  'xxx'; }"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "const foo = 'safe';",
+                "var bar = foo;",
+                "(new HTMLScriptElement).setAttribute(bar, 'xxx');")),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSetAttribute Message");
+
+    testNoWarning(externs(externs), srcs("(new HTMLScriptElement)['data-random'] = 'xxx';"));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "const foo = 'safe';",
+                "const bar = foo;",
+                "(new HTMLScriptElement).setAttribute(bar, 'xxx');")));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "/** @const */",
+                "var foo = 'safe';",
+                "(new HTMLScriptElement).setAttribute(foo, 'xxx');")));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "goog.provide('test.Attribute');",
+                "/** @const */",
+                "test.Attribute.foo = 'safe';",
+                "(new HTMLScriptElement).setAttribute(test.Attribute.foo, 'xxx');")));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            new String[] {
+              lines(
+                  "goog.provide('test.Attribute');",
+                  "",
+                  "/** @enum {string} */",
+                  "test.Attribute = {SRC: 'src', HREF: 'href', SAFE: 'safe'};"),
+              lines(
+                  "goog.module('test.setAttribute');",
+                  "",
+                  "const Attribute = goog.require('test.Attribute');",
+                  "",
+                  "const attr = Attribute.SAFE;",
+                  "(new HTMLScriptElement).setAttribute(attr, 'xxx');")
+            }));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "goog.provide('xid');",
+                "goog.provide('xid.String');",
+                "/** @enum {string} */ xid.String = {DO_NOT_USE: ''};",
+                "/**",
+                " * @param {string} id",
+                " * @return {xid.String}",
+                " */",
+                "xid = function(id) {return /** @type {xid.String} */ (id);};",
+                "const attr = xid('src');",
+                "(new HTMLScriptElement).setAttribute(attr, 'xxx');",
+                "(new HTMLScriptElement)[attr] = 'xxx';")));
+  }
+
+  @Test
+  public void testBanSettingAttributes() {
+    configuration =
+        lines(
+            "requirement: {\n",
+            "  type: CUSTOM\n",
+            "  value: 'Element.prototype.attr'\n",
+            "  value: 'Foo.prototype.attrib'\n",
+            "  java_class: 'com.google.javascript.jscomp.ConformanceRules$BanSettingAttributes'\n",
+            "  error_message: 'BanSettingAttributes Message'\n",
+            "}");
+
+    String externs =
+        lines(
+            DEFAULT_EXTERNS,
+            "/** @constructor */ function Foo() {}\n",
+            "/** @constructor */ function Bar() {}\n",
+            "/** @constructor */ function Element() {}\n",
+            "/** @constructor @extends {Element} */ function HTMLScriptElement() {}\n");
+
+    testWarning(
+        externs(externs),
+        srcs("(new Foo).attrib('SRc', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSettingAttributes Message");
+
+    testWarning(
+        externs(externs),
+        srcs("(new HTMLScriptElement).attr('href', 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSettingAttributes Message");
+
+    testNoWarning(externs(externs), srcs("(new Bar).attr('src', 'xxx')"));
+
+    testNoWarning(externs(externs), srcs("(new Foo).attrib('src')"));
+
+    testNoWarning(externs(externs), srcs("(new HTMLScriptElement).attrib('src', 'xxx')"));
+
+    testNoWarning(externs(externs), srcs("(new HTMLScriptElement).attr('data-random', 'xxx')"));
+
+    testWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "const foo = 'safe';",
+                "var bar = foo;",
+                "(new HTMLScriptElement).attr(bar, 'xxx');")),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanSettingAttributes Message");
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "const foo = 'safe';",
+                "const bar = foo;",
+                "(new HTMLScriptElement).attr(bar, 'xxx');")));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            new String[] {
+              lines(
+                  "goog.provide('test.Attribute');",
+                  "",
+                  "/** @enum {string} */",
+                  "test.Attribute = {SRC: 'src', HREF: 'href', SAFE: 'safe'};"),
+              lines(
+                  "goog.module('test.attr');",
+                  "",
+                  "const Attribute = goog.require('test.Attribute');",
+                  "",
+                  "const attr = Attribute.SAFE;",
+                  "(new HTMLScriptElement).attr(attr, 'xxx');")
+            }));
+
+    testNoWarning(
+        externs(externs),
+        srcs(
+            lines(
+                "goog.provide('xid');",
+                "goog.provide('xid.String');",
+                "/** @enum {string} */ xid.String = {DO_NOT_USE: ''};",
+                "/**",
+                " * @param {string} id",
+                " * @return {xid.String}",
+                " */",
+                "xid = function(id) {return /** @type {xid.String} */ (id);};",
+                "const attr = xid('src');",
+                "(new HTMLScriptElement).attr(attr, 'xxx');")));
+  }
+
+  @Test
+  public void testBanExecCommand() {
+    configuration =
+        lines(
+            "requirement: {\n",
+            "  type: CUSTOM\n",
+            "  value: 'insertHTML'\n",
+            "  java_class: 'com.google.javascript.jscomp.ConformanceRules$BanExecCommand'\n",
+            "  error_message: 'BanExecCommand message'\n",
+            "}");
+
+    String externs = lines(DEFAULT_EXTERNS, "/** @constructor */ function Document() {}");
+
+    testWarning(
+        externs(externs),
+        srcs("(new Document).execCommand('insertHtml', false, 'xxx')"),
+        CheckConformance.CONFORMANCE_VIOLATION,
+        "Violation: BanExecCommand message");
+
+    testNoWarning(externs(externs), srcs("(new Document).execCommand('bold')"));
   }
 
   @Test

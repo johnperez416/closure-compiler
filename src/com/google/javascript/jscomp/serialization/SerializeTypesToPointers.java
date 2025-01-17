@@ -25,32 +25,49 @@ import static com.google.javascript.jscomp.serialization.TypePointers.trimOffset
 import static java.util.Comparator.naturalOrder;
 
 import com.google.common.collect.ComparisonChain;
-import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.gson.Gson;
+import com.google.gson.stream.JsonWriter;
 import com.google.javascript.jscomp.AbstractCompiler;
 import com.google.javascript.jscomp.InvalidatingTypes;
 import com.google.javascript.jscomp.NodeTraversal;
 import com.google.javascript.jscomp.NodeUtil;
 import com.google.javascript.jscomp.TypeMismatch;
+import com.google.javascript.jscomp.base.LinkedIdentityHashMap;
 import com.google.javascript.jscomp.colors.ColorId;
 import com.google.javascript.jscomp.diagnostic.LogFile;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.JSType;
-import java.util.IdentityHashMap;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
-/** Grab a TypePointer for each JSType on the AST and log information about the pointers. */
+/**
+ * Grab an integer TypePool pointer for each JSType on the AST and log information about the
+ * pointers.
+ */
 final class SerializeTypesToPointers {
 
   private final AbstractCompiler compiler;
   private final JSTypeReconserializer jstypeReconserializer;
-  private final IdentityHashMap<JSType, TypePointer> typePointersByJstype = new IdentityHashMap<>();
+  private final LinkedHashSet<String> propertiesReferencedInAst;
+  private final LinkedIdentityHashMap<JSType, Integer> typePointersByJstype =
+      new LinkedIdentityHashMap<>();
   private static final Gson GSON = new Gson();
-  private TypePool typePool = null;
+  private @Nullable TypePool typePool = null;
 
   private SerializeTypesToPointers(
-      AbstractCompiler compiler, JSTypeReconserializer jstypeReconserializer) {
+      AbstractCompiler compiler,
+      JSTypeReconserializer jstypeReconserializer,
+      LinkedHashSet<String> propertiesReferencedInAst) {
     this.compiler = compiler;
     this.jstypeReconserializer = jstypeReconserializer;
+    this.propertiesReferencedInAst = propertiesReferencedInAst;
   }
 
   static SerializeTypesToPointers create(
@@ -61,14 +78,22 @@ final class SerializeTypesToPointers {
         new InvalidatingTypes.Builder(compiler.getTypeRegistry())
             .addAllTypeMismatches(compiler.getTypeMismatches())
             .build();
+
+    // this set requires access to the externs and src ASTs, so can't be populated yet.
+    LinkedHashSet<String> propertiesReferencedInAst = new LinkedHashSet<>();
     JSTypeReconserializer jsTypeReconserializer =
         JSTypeReconserializer.create(
-            compiler.getTypeRegistry(), invalidatingTypes, stringPoolBuilder, serializationOptions);
-    return new SerializeTypesToPointers(compiler, jsTypeReconserializer);
+            compiler.getTypeRegistry(),
+            invalidatingTypes,
+            stringPoolBuilder,
+            propertiesReferencedInAst::contains,
+            serializationOptions);
+    return new SerializeTypesToPointers(compiler, jsTypeReconserializer, propertiesReferencedInAst);
   }
 
   void gatherTypesOnAst(Node root) {
     checkState(this.typePool == null, "Cannot call process() twice");
+    NodeTraversal.traverse(this.compiler, root, new PropertySearchCallback());
     NodeTraversal.traverse(this.compiler, root, new TypeSearchCallback());
 
     // these types are only used when debug logging is enabled, but we always serialize them as not
@@ -83,6 +108,40 @@ final class SerializeTypesToPointers {
     logSerializationDebugInfo(this.jstypeReconserializer, this.typePool);
   }
 
+  /**
+   * Finds all unquoted property names referenced outside @typeSummary files
+   *
+   * <p>Only property names found in this traversal will be serialized onto a color's list of "own
+   * properties". Properties referenced only inside `@typeSummary` files may be excluded because
+   * they don't matter for optimization of this library's srcs.
+   */
+  private final class PropertySearchCallback implements NodeTraversal.Callback {
+    @Override
+    public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
+      return !n.isScript() || !NodeUtil.isFromTypeSummary(n);
+    }
+
+    @Override
+    public void visit(NodeTraversal t, Node n, Node parent) {
+      switch (n.getToken()) {
+        case GETPROP: // "name" from (someObject.name)
+        case OPTCHAIN_GETPROP: // "name" from (someObject?.name)
+          propertiesReferencedInAst.add(n.getString());
+          break;
+        case STRING_KEY: // "name" from obj = {name: 0}
+        case MEMBER_FUNCTION_DEF: // "name" from class C { name() {} }
+        case MEMBER_FIELD_DEF: // "name" from class C { name = 0; }
+        case GETTER_DEF: // "name" from class C { get name() {} }
+        case SETTER_DEF: // "name" from class C { set name(n) {} }
+          if (!n.isQuotedStringKey()) {
+            propertiesReferencedInAst.add(n.getString());
+          }
+          break;
+        default:
+      }
+    }
+  }
+
   private final class TypeSearchCallback implements NodeTraversal.Callback {
     @Override
     public boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
@@ -91,14 +150,27 @@ final class SerializeTypesToPointers {
 
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
+      if (n.isRoot()) {
+        // the ROOT node is given the 'global this' type for use during typechecking, but this is
+        // not needed for optimizations. (The 'global this' type will still be serialized if
+        // referenced in actual code though.)
+        return;
+      }
       JSType type = n.getJSType();
       if (type != null) {
         typePointersByJstype.computeIfAbsent(type, jstypeReconserializer::serializeType);
       }
+      Node shadow = n.getClosureUnawareShadow();
+      if (shadow != null) {
+        // Shadow roots are structured as
+        // ROOT -> SCRIPT -> EXPR_RESULT -> FUNCTION
+        NodeTraversal.traverse(
+            compiler, shadow.getFirstFirstChild().getFirstChild(), new TypeSearchCallback());
+      }
     }
   }
 
-  IdentityHashMap<JSType, TypePointer> getTypePointersByJstype() {
+  LinkedIdentityHashMap<JSType, Integer> getTypePointersByJstype() {
     return typePointersByJstype;
   }
 
@@ -110,7 +182,13 @@ final class SerializeTypesToPointers {
     // Log information about how the JSTypes correspond to the colors. This may be useful later on
     // in optimizations.
     try (LogFile log = this.compiler.createOrReopenLog(this.getClass(), "object_uuids.log")) {
-      log.log(() -> GSON.toJson(serializer.getColorIdToJSTypeMapForDebugging().asMap()));
+      if (log.isLogging()) {
+        ImmutableMap<String, Collection<JSType>> allSerializedTypes =
+            serializer.getColorIdToJSTypeMapForDebugging().asMap();
+        // Stream json writing here rather than building up the entire json representation at once
+        // because the latter used to cause OOMs.
+        log.logJson(new StreamObjectUuidsJson(allSerializedTypes));
+      }
     }
 
     // Log type mismatches, which contribute to the definition of an "invalidating" type
@@ -126,11 +204,44 @@ final class SerializeTypesToPointers {
    * <p>Not part of the main API for this callback. For use when serializing additional types for
    * debug logging.
    */
-  private ImmutableSet<TypeMismatchJson> logTypeMismatches(
+  private ImmutableSortedSet<TypeMismatchJson> logTypeMismatches(
       Iterable<TypeMismatch> typeMismatches, JSTypeReconserializer serializer, TypePool typePool) {
     return stream(typeMismatches)
         .map(mismatch -> TypeMismatchJson.create(mismatch, serializer, typePool))
         .collect(toImmutableSortedSet(naturalOrder()));
+  }
+
+  /**
+   * Writes a JSON object whose keys are color ids and values are arrays of JSType strings.
+   *
+   * <p>Example: `{0: ['*', '?', 'None'], 10f34lksdf: ['SomeProtoCtor']}`
+   */
+  private static class StreamObjectUuidsJson implements LogFile.StreamedJsonProducer {
+    private final ImmutableMap<String, Collection<JSType>> allSerializedTypes;
+
+    StreamObjectUuidsJson(ImmutableMap<String, Collection<JSType>> allSerializedTypes) {
+      this.allSerializedTypes = allSerializedTypes;
+    }
+
+    @Override
+    public void writeJson(JsonWriter jsonWriter) throws IOException {
+      jsonWriter.beginObject();
+      for (Map.Entry<String, Collection<JSType>> entry : allSerializedTypes.entrySet()) {
+        jsonWriter.name(entry.getKey()); // color id
+        jsonWriter.beginArray();
+        // sort JSTypes by string representation
+        ArrayList<String> jstypes = new ArrayList<>();
+        for (JSType jstype : entry.getValue()) {
+          jstypes.add(jstype.toString());
+        }
+        Collections.sort(jstypes);
+        for (String typeName : jstypes) { // all corresponding JSTypes
+          jsonWriter.value(typeName);
+        }
+        jsonWriter.endArray();
+      }
+      jsonWriter.endObject();
+    }
   }
 
   private static final class TypeMismatchJson implements Comparable<TypeMismatchJson> {
@@ -146,8 +257,8 @@ final class SerializeTypesToPointers {
 
     static TypeMismatchJson create(
         TypeMismatch x, JSTypeReconserializer serializer, TypePool typePool) {
-      TypePointer foundPointer = serializer.serializeType(x.getFound());
-      TypePointer requiredPointer = serializer.serializeType(x.getRequired());
+      int foundPointer = serializer.serializeType(x.getFound());
+      int requiredPointer = serializer.serializeType(x.getRequired());
 
       return new TypeMismatchJson(
           x, typePointerToId(foundPointer, typePool), typePointerToId(requiredPointer, typePool));
@@ -160,8 +271,7 @@ final class SerializeTypesToPointers {
      * all types reachable from the AST, while a TypeMismatch may contain a type in dead code no
      * longer reachable from the AST.
      */
-    private static ColorId typePointerToId(TypePointer typePointer, TypePool typePool) {
-      int poolOffset = typePointer.getPoolOffset();
+    private static ColorId typePointerToId(int poolOffset, TypePool typePool) {
       if (isAxiomatic(poolOffset)) {
         return TypePointers.OFFSET_TO_AXIOMATIC_COLOR.get(poolOffset).getId();
       }

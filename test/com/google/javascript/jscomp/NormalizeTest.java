@@ -22,16 +22,21 @@ import com.google.javascript.jscomp.CompilerOptions.ChunkOutputType;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.CompilerOptions.PropertyCollapseLevel;
 import com.google.javascript.jscomp.deps.ModuleLoader.ResolutionMode;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.function.Predicate;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/** @author johnlenz@google.com (John Lenz) */
+/**
+ * @author johnlenz@google.com (John Lenz)
+ */
 @RunWith(JUnit4.class)
 public final class NormalizeTest extends CompilerTestCase {
 
@@ -43,7 +48,7 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Override
   protected CompilerPass getProcessor(final Compiler compiler) {
-    return new Normalize(compiler, false);
+    return Normalize.createNormalizeForOptimizations(compiler);
   }
 
   @Override
@@ -57,6 +62,194 @@ public final class NormalizeTest extends CompilerTestCase {
   protected int getNumRepetitions() {
     // The normalize pass is only run once.
     return 1;
+  }
+
+  @Before
+  public void customSetUp() throws Exception {
+    // Validate that Normalize copies colors onto any nodes it synthesizes
+    enableTypeInfoValidation();
+    enableTypeCheck();
+    replaceTypesWithColors();
+  }
+
+  @Test
+  public void testMultipleForOfLoopsWithSameNameInductionVariable() {
+    Sources srcs =
+        srcs(
+            lines(
+                "function* inorder1(t) {",
+                "    for (var x of []) {",
+                "      yield x;",
+                "    }",
+                "    for (var x of []) {",
+                "      yield x;",
+                "    }",
+                "}"));
+
+    Expected expected =
+        expected(
+            lines(
+                "function* inorder1(t) {",
+                "    var x;",
+                "    for (x of []) {",
+                "      yield x;",
+                "    }",
+                "    for (x of []) {",
+                "      yield x;",
+                "    }",
+                "}"));
+
+    test(srcs, expected); //
+  }
+
+  @Test
+  @SuppressWarnings("RhinoNodeGetFirstFirstChild") // to allow adding separate comments per-child
+  public void testConstAnnotationPropagation() {
+    test(
+        "const x = 3; var a,     b; var y = x + 2;", //
+        "const x = 3; var a; var b; var y = x + 2;");
+    Node root = getLastCompiler().getRoot();
+    Node scriptNode =
+        root.getLastChild() // ROOT of input sources
+            .getLastChild();
+
+    // `const x = 3;`
+    Node constNode = scriptNode.getFirstChild();
+
+    // `x`
+    Node constName = constNode.getOnlyChild();
+    assertThat(constName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    // `var y = x + 2;`
+    Node lastStatement = scriptNode.getLastChild();
+    // `y = x + 2`
+    Node yVar = lastStatement.getOnlyChild();
+    Node secondNameNodeOfX =
+        yVar.getFirstChild() // `x + 2`
+            .getFirstChild();
+
+    assertThat(secondNameNodeOfX.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+  }
+
+  @Test
+  @SuppressWarnings("RhinoNodeGetFirstFirstChild") // to allow adding separate comments per-child
+  public void testRestConstAnnotationPropagation() {
+    testSame(
+        lines(
+            "const {...x} = {a: 3};", //
+            "var y = x;"));
+    Node root = getLastCompiler().getRoot();
+    Node scriptNode =
+        root.getLastChild() // ROOT of input sources
+            .getLastChild();
+
+    // `const {...x} = {a: 3};`
+    Node constNode = scriptNode.getFirstChild();
+
+    // `{...x}`
+    Node objectPattern =
+        constNode
+            .getFirstChild() // DESTRUCTURING_LHS
+            .getFirstChild();
+
+    // `x`
+    Node constName =
+        objectPattern
+            .getFirstChild() // OBJECT_REST
+            .getFirstChild();
+    assertThat(constName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    // `var y = x`
+    Node lastStatement = scriptNode.getLastChild();
+    // `y = x`
+    Node yVar = lastStatement.getOnlyChild();
+    Node secondNameNodeOfX = yVar.getFirstChild();
+    assertThat(secondNameNodeOfX.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+  }
+
+  @Test
+  @SuppressWarnings("RhinoNodeGetFirstFirstChild") // to allow adding separate comments per-child
+  public void testRestConstAnnotationPropagation_onlyConstVars() {
+    testSame(
+        lines(
+            "const obj = {a: 3, b: 'string', c: null};",
+            "const {...rest} = obj;",
+            "const y = rest;"));
+    Node root = getLastCompiler().getRoot();
+    Node scriptNode =
+        root.getLastChild() // ROOT of input sources
+            .getLastChild();
+    Node firstStatement = scriptNode.getFirstChild();
+
+    // `obj` from `const obj = {a: 3, b: 'string', c: null}`
+    Node objName = firstStatement.getFirstChild();
+    assertThat(objName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    // `const {...rest} = obj`
+    Node constNode = firstStatement.getNext();
+
+    // `{...rest} = obj
+    Node destructuringNode = constNode.getFirstChild();
+
+    // `obj` from previous comment
+    Node secondObjName = destructuringNode.getLastChild();
+    assertThat(secondObjName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    // `{...rest}
+    Node objectPattern = destructuringNode.getFirstChild();
+
+    // `rest`
+    Node constName =
+        objectPattern
+            .getFirstChild() // OBJECT_REST
+            .getFirstChild();
+    assertThat(constName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    // `const y = rest`
+    Node secondConstNode = constNode.getNext();
+
+    // `y = rest`
+    Node yVar = secondConstNode.getOnlyChild();
+    assertThat(yVar.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    Node secondConstName = yVar.getFirstChild();
+    assertThat(secondConstName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+  }
+
+  @Test
+  public void testConstRHSPropagation() {
+    testSame(lines("const obj = function inner() {inner();};"));
+    Node root = getLastCompiler().getRoot();
+    Node scriptNode =
+        root.getLastChild() // ROOT of input sources
+            .getLastChild();
+    Node firstStatement = scriptNode.getFirstChild();
+
+    // `obj` from `const obj = function inner() {inner();};`
+    Node objName = firstStatement.getFirstChild();
+    assertThat(objName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    Node functionName = objName.getOnlyChild().getFirstChild();
+    assertThat(functionName.isName()).isTrue();
+    assertThat(functionName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+  }
+
+  @Test
+  public void testConstRHSPropagation2() {
+    testSame(lines("/** @const */ var obj = function inner() {inner();};"));
+    Node root = getLastCompiler().getRoot();
+    Node scriptNode =
+        root.getLastChild() // ROOT of input sources
+            .getLastChild();
+    Node firstStatement = scriptNode.getFirstChild();
+
+    // `obj` from `var obj = function inner() {inner();};`
+    Node objName = firstStatement.getFirstChild();
+    assertThat(objName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
+
+    Node functionName = objName.getOnlyChild().getFirstChild();
+    assertThat(functionName.isName()).isTrue();
+    assertThat(functionName.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
   }
 
   @Test
@@ -204,6 +397,7 @@ public final class NormalizeTest extends CompilerTestCase {
   public void testClassField() {
     test(
         lines(
+            "/** @unrestricted */",
             "class Foo {", //
             "  f1;",
             "  ['f2'] = 1;",
@@ -216,6 +410,92 @@ public final class NormalizeTest extends CompilerTestCase {
             "  ['f2'] = 1",
             "  static f3",
             "  static 'f4' = 'hi'",
+            "}"));
+  }
+
+  @Test
+  public void testClassStaticBlock() {
+    test(
+        lines(
+            "var x;",
+            "class Foo {", //
+            "  static {",
+            "    var x;",
+            "    let y;",
+            "    this.x;",
+            "  }",
+            "  static {",
+            "    var x;",
+            "    let y;",
+            "  }",
+            "}",
+            "class Bar {",
+            "  static {",
+            "    var x;",
+            "    let y;",
+            "    this.x;",
+            "  }",
+            "}"),
+        lines(
+            "var x;",
+            "class Foo {", //
+            "  static {",
+            "    var x$jscomp$1;",
+            "    let y;",
+            "    this.x;",
+            "  }",
+            "  static {",
+            "    var x$jscomp$2;",
+            "    let y$jscomp$1;",
+            "  }",
+            "}",
+            "class Bar {",
+            "  static {",
+            "    var x$jscomp$3;",
+            "    let y$jscomp$2;",
+            "    this.x;",
+            "  }",
+            "}"));
+  }
+
+  @Test
+  public void testClassStaticBlock_innerFunctionHoisted() {
+    test(
+        lines(
+            "var x;",
+            "class Foo {", //
+            "  static {",
+            "    this.x;",
+            "    function f1() {}",
+            "  }",
+            "  static {",
+            "    let y;",
+            "    function f2() {}",
+            "  }",
+            "}",
+            "class Bar {",
+            "  static {",
+            "    var z;",
+            "    function f3() {}",
+            "  }",
+            "}"),
+        lines(
+            "var x;",
+            "class Foo {", //
+            "  static {",
+            "    function f1() {}",
+            "    this.x;",
+            "  }",
+            "  static {",
+            "    function f2() {}",
+            "    let y;",
+            "  }",
+            "}",
+            "class Bar {",
+            "  static {",
+            "    function f3() {}",
+            "    var z;",
+            "  }",
             "}"));
   }
 
@@ -314,7 +594,7 @@ public final class NormalizeTest extends CompilerTestCase {
     test("x /= 1;", "x = x / 1;");
     test("x %= 1;", "x = x % 1;");
 
-    test("/** @suppress {const} */ x += 1;", "/** @suppress {const} */ x = x + 1;");
+    test("/** @suppress {const} */ x += 1;", "x = x + 1;");
   }
 
   @Test
@@ -431,7 +711,7 @@ public final class NormalizeTest extends CompilerTestCase {
     test(
         externs("var extern;"),
         srcs("/** @suppress {duplicate} */ var extern = 3;"),
-        expected("/** @suppress {duplicate} */ var extern = 3;"));
+        expected("var extern = 3;"));
   }
 
   @Test
@@ -460,11 +740,13 @@ public final class NormalizeTest extends CompilerTestCase {
     // Verify destructuring var declarations are extracted.
     test(
         "for (var [a, b] = [1, 2]; a < 2; a = b++) foo();",
-        "var [a, b] = [1, 2]; for (; a < 2; a = b++) foo();");
+        "var a; var b; [a, b] = [1, 2]; for (; a < 2; a = b++) foo();");
   }
 
   @Test
   public void testForIn1() {
+    ignoreWarnings(DiagnosticGroups.MISSING_PROPERTIES);
+
     // Verify nothing happens with simple for-in
     testSame("for(a in b) foo();");
 
@@ -480,7 +762,10 @@ public final class NormalizeTest extends CompilerTestCase {
     test("if (x) for(var a in b) foo()", "if (x) { var a; for(a in b) foo() }");
 
     // Verify names in destructuring declarations are individually declared.
-    test("for (var [a, b] in c) foo();", "var a; var b; for ([a, b] in c) foo();");
+    test(
+        externs(new TestExternsBuilder().addIterable().addString().build()),
+        srcs("for (var [a, b] in c) foo();"),
+        expected("var a; var b; for ([a, b] in c) foo();"));
 
     test("for (var {a, b} in c) foo();", "var a; var b; for ({a: a, b: b} in c) foo();");
   }
@@ -495,6 +780,8 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testForOf() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
     // Verify nothing happens with simple for-of
     testSame("for (a of b) foo();");
 
@@ -517,6 +804,8 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testForAwaitOf() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
     // Verify nothing happens with simple for-await-of
     testSame("async () => { for await (a of b) foo(); }");
 
@@ -599,9 +888,11 @@ public final class NormalizeTest extends CompilerTestCase {
   @Test
   public void testNormalizeFunctionDeclarations() {
     testSame("function f() {}");
+    testSame("function f() {}; var g = f;");
     testSame("var f = function () {}");
     test("var f = function f() {}", "var f = function f$jscomp$1() {}");
     testSame("var f = function g() {}");
+    testSame("var f = function(){}; var g = f;");
     testSame("{function g() {}}");
     testSame("if (function g() {}) {}");
     testSame("if (true) {function g() {}}");
@@ -618,6 +909,9 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testMakeLocalNamesUnique() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+    disableCompareJsDoc();
+
     // Verify global names are untouched.
     testSame("var a;");
 
@@ -669,6 +963,16 @@ public final class NormalizeTest extends CompilerTestCase {
         srcs("var a;", "let a; export {a as a};"),
         expected("var a;", "let a$jscomp$1; export {a$jscomp$1 as a};"));
 
+    // Verify same local names in 2 different files get different new names
+    test(
+        srcs(
+            "function foo() {var a; a;}",
+            "function bar() {let a; let a$jscomp$1; a + a$jscomp$1;}"),
+        expected(
+            "function foo() {var a; a;}",
+            "function bar() {let a$jscomp$1; let a$jscomp$1$jscomp$1; a$jscomp$1 +"
+                + " a$jscomp$1$jscomp$1;}"));
+
     test(
         srcs("var a;", "import {a as a} from './foo.js'; let b = a;"),
         expected("var a;", "import {a as a$jscomp$1} from './foo.js'; let b = a$jscomp$1;"));
@@ -676,6 +980,8 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testMakeParamNamesUnique() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
     test(
         "function f(x) { x; }\nfunction g(x) { x; }",
         "function f(x) { x; }\nfunction g(x$jscomp$1) { x$jscomp$1; }");
@@ -699,6 +1005,7 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testNoRenameParamNames() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
     testSame("function f(x) { x; }");
 
     testSame("function f(...x) { x; }");
@@ -711,16 +1018,38 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   @Test
+  public void testRemoveDuplicateVarDeclarations_destructuringArrayDeclaration() {
+    test(
+        "function f() { var a = 3; var [a] = [4]; }", //
+        "function f() { var a = 3; [a]= [4]; }");
+  }
+
+  @Test
+  public void testRemoveDuplicateVarDeclarations_destructuringObjectDeclaration() {
+    test(
+        "function f() { var a = 3; var {a} = {a: 4}; }", //
+        "function f() { var a = 3; ({a}= {a: 4});}");
+  }
+
+  @Test
   public void testRemoveDuplicateVarDeclarations1() {
     test("function f() { var a; var a }", "function f() { var a; }");
+
     test("function f() { var a = 1; var a = 2 }", "function f() { var a = 1; a = 2 }");
+    // second declaration not assigned to any rhs, empty reference removed
+    test("function f() { var a = 1; var a; }", "function f() { var a = 1;}");
+
+    // second declaration is a destructuring declaration; converted to assignment
+    test("function f() { var a = 1; var [a] = [2]; }", "function f() { var a = 1; [a]= [2]; }");
+
+    // this should be an error in the parser but isn't
+    test("function f() { var a = 1; const a =2; }", "function f() { var a = 1; const a = 2 }");
     test("var a = 1; function f(){ var a = 2 }", "var a = 1; function f(){ var a$jscomp$1 = 2 }");
     test(
         "function f() { var a = 1; label1:var a = 2 }",
         "function f() { var a = 1; label1:{a = 2}}");
     test("function f() { var a = 1; label1:var a }", "function f() { var a = 1; label1:{} }");
-    test(
-        "function f() { var a = 1; for(var a in b); }", "function f() { var a = 1; for(a in b); }");
+    test("function f() { var a = 1; for(var a in b); }", "function f() { var a = 1; for(a in b);}");
   }
 
   @Test
@@ -732,6 +1061,10 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testRemoveDuplicateVarDeclarations3() {
+    ignoreWarnings(
+        TypeCheck.FUNCTION_MASKS_VARIABLE,
+        TypeValidator.TYPE_MISMATCH_WARNING,
+        TypeValidator.DUP_VAR_DECLARATION);
     test("var f = 1; function f(){}", "f = 1; function f(){}");
     test("var f; function f(){}", "function f(){}");
 
@@ -747,6 +1080,7 @@ public final class NormalizeTest extends CompilerTestCase {
   // http://blickly.github.io/closure-compiler-issues/#290
   @Test
   public void testRemoveDuplicateVarDeclarations4() {
+    disableCompareJsDoc();
     testSame("if (!Arguments) { /** @suppress {duplicate} */ var Arguments = {}; }");
   }
 
@@ -901,15 +1235,129 @@ public final class NormalizeTest extends CompilerTestCase {
     }
   }
 
+  // Test that the name nodes of function expressions are unconditionally marked as const even if
+  // the LHS declaration is a var
   @Test
-  public void testIsConstantByDestructuring() {
-    test(
-        "var {CONST} = {CONST:3}; var b = CONST;",
-        "var {CONST: CONST} = {CONST:3}; var b = CONST;");
+  public void testRHSFunctionExpressionNameNodeIsConstant() {
+    testSame("var someNonConstVar = function foo() {};");
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(4);
+    assertThat(constantNodes).hasSize(1);
+    assertThat(constantNodes.iterator().next().getString()).isEqualTo("foo");
+  }
+
+  // Test that the name nodes of function expressions are unconditionally marked as const if the LHS
+  // is a const
+  @Test
+  public void testRHSFunctionExpressionNameNodeIsConstant1() {
+    testSame("const someConstVar = function foo() {};");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2); // {someConstVar, foo}
+    Iterator<Node> itr = constantNodes.iterator();
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("someConstVar");
+  }
+
+  // Test that the name nodes of function expressions are unconditionally marked as const if the LHS
+  // is a const
+  @Test
+  public void testRHSFunctionExpressionNameNodeIsConstant2() {
+    testSame("const someConstVar = function foo() { foo(); };");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(3); // {someConstVar, foo, foo}
+    Iterator<Node> itr = constantNodes.iterator();
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("someConstVar");
+  }
+
+  // Test that the name nodes of function expressions are unconditionally marked as const
+  // irrespective of whether or not the LHS is a const
+  @Test
+  public void testRHSFunctionExpressionNameNodeIsConstant3() {
+    testSame(
+        lines(
+            "const someConstVar = function foo() { foo(); };",
+            // this call to something undefined but having the same name foo is not marked const
+            "foo();"));
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(3); // {someConstVar, foo, foo}
+    Iterator<Node> itr = constantNodes.iterator();
+
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("someConstVar");
+  }
+
+  // Test that the name nodes of function expressions are unconditionally marked as const
+  // irrespective of whether or not the LHS is a const
+  @Test
+  public void testRHSFunctionExpressionNameNodeIsConstant4() {
+    testSame(
+        lines(
+            "let someNonConstVar = function foo() { foo(); };",
+            // this call to something undefined but having the same name foo is not marked const
+            "foo();"));
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2); // {foo, foo}
+    Iterator<Node> itr = constantNodes.iterator();
+
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("foo");
+  }
+
+  // Test that the name nodes of function expressions are unconditionally marked as const
+  // irrespective of whether or not the LHS is a const
+  @Test
+  public void testFunctionExpressionNameNodeIsConstant() {
+    testSame("use(function foo(i) { foo(i-1);});");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2); // {foo, foo}
+    Iterator<Node> itr = constantNodes.iterator();
+
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("foo");
+  }
+
+  // Test that the name nodes of function expressions are unconditionally marked as const
+  // irrespective of whether or not the LHS is a const
+  @Test
+  public void testFunctionExpressionNameNodeIsConstant2() {
+    testSame(
+        lines(
+            "use(function foo(i) { foo(i-1);});",
+            // this call to something undefined but having the same name foo is not marked const
+            "foo();"));
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2); // {foo, foo}
+    Iterator<Node> itr = constantNodes.iterator();
+
+    assertThat(itr.next().getString()).isEqualTo("foo");
+    assertThat(itr.next().getString()).isEqualTo("foo");
+  }
+
+  @Test
+  public void testIsConstantByDestructuring() {
+    test(
+        "const {CONST} = {CONST:3}; let b = CONST;",
+        "const {CONST: CONST} = {CONST:3}; let b = CONST;");
+    Node n = getLastCompiler().getRoot();
+
+    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
+    assertThat(constantNodes).hasSize(2);
     for (Node hasProp : constantNodes) {
       assertThat(hasProp.getString()).isEqualTo("CONST");
     }
@@ -917,19 +1365,9 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testIsConstantByDestructuringWithDefault() {
-    test("var {CONST = 3} = {}; var b = CONST;", "var {CONST: CONST = 3} = {}; var b = CONST;");
-    Node n = getLastCompiler().getRoot();
+    ignoreWarnings(DiagnosticGroups.MISSING_PROPERTIES);
 
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(3);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
-
-  @Test
-  public void testPropertyIsConstant1() {
-    testSame("var a = {}; a.CONST = 3; var b = a.CONST;");
+    test("const {CONST = 3} = {}; var b = CONST;", "const {CONST: CONST = 3} = {}; var b = CONST;");
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
@@ -940,92 +1378,23 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   @Test
-  public void testPropertyIsConstant1_optChain() {
-    testSame("var a = {}; a.CONST = 3; var b = a?.CONST;");
+  public void testPropertyIsConstantIfMatchesConstantName() {
+    // verify that the /** @const */ 'other' doesn't accidentally cause the string key in
+    // {'other: 4'} to be marked const
+    testSame("var a = {other: 4}; /** @const */ var other = 5;");
     Node n = getLastCompiler().getRoot();
 
     Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
+    assertThat(constantNodes).hasSize(1);
     for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
+      assertThat(hasProp.getString()).isEqualTo("other");
     }
   }
 
-  @Test
-  public void testPropertyIsConstant2() {
-    testSame("var a = {CONST: 3}; var b = a.CONST;");
-    Node n = getLastCompiler().getRoot();
-
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
-
-  @Test
-  public void testPropertyIsConstant2_optChain() {
-    testSame("var a = {CONST: 3}; var b = a?.CONST;");
-    Node n = getLastCompiler().getRoot();
-
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
-
-  @Test
-  public void testGetterPropertyIsConstant() {
-    testSame("var a = { get CONST() {return 3} }; var b = a.CONST;");
-    Node n = getLastCompiler().getRoot();
-
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
-
-  @Test
-  public void testGetterPropertyIsConstant_optChain() {
-    testSame("var a = { get CONST() {return 3} }; var b = a?.CONST;");
-    Node n = getLastCompiler().getRoot();
-
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
-
-  @Test
-  public void testSetterPropertyIsConstant() {
-    // Verifying that a SET is properly annotated.
-    testSame("var a = { set CONST(b) {throw 'invalid'} }; var c = a.CONST;");
-    Node n = getLastCompiler().getRoot();
-
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
-
-  @Test
-  public void testSetterPropertyIsConstant_optChain() {
-    // Verifying that a SET is properly annotated.
-    testSame("var a = { set CONST(b) {throw 'invalid'} }; var c = a?.CONST;");
-    Node n = getLastCompiler().getRoot();
-
-    Set<Node> constantNodes = findNodesWithProperty(n, IS_CONSTANT_NAME);
-    assertThat(constantNodes).hasSize(2);
-    for (Node hasProp : constantNodes) {
-      assertThat(hasProp.getString()).isEqualTo("CONST");
-    }
-  }
   @Test
   public void testShadowFunctionName() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
     test(
         lines("function f() {", "  var f = 'test';", "  console.log(f);", "}"),
         lines("function f() {", "  var f$jscomp$1 = 'test';", "  console.log(f$jscomp$1);", "}"));
@@ -1035,7 +1404,7 @@ public final class NormalizeTest extends CompilerTestCase {
       (n) -> n.getBooleanProp(Node.IS_CONSTANT_NAME);
 
   private Set<Node> findNodesWithProperty(Node root, Predicate<Node> prop) {
-    final Set<Node> set = new HashSet<>();
+    final Set<Node> set = new LinkedHashSet<>();
 
     NodeTraversal.builder()
         .setCompiler(getLastCompiler())
@@ -1119,6 +1488,20 @@ public final class NormalizeTest extends CompilerTestCase {
   }
 
   @Test
+  public void testBlocklessArrowFunction_withinArgs_getBlocks() {
+    // disable type checking to prevent `property map never defined` errors.
+    disableTypeCheck();
+    disableTypeInfoValidation();
+    test(
+        lines(
+            "function sortAndConcatParams(params) {", // arrow fn body missing block
+            "  return [...params].map(((k) => `k`));}"),
+        lines(
+            "function sortAndConcatParams(params) {", // gets block {}
+            "  return [...params].map(((k) => { return `k`; }));}"));
+  }
+
+  @Test
   public void testArrowFunctionInFunction() {
     test(
         lines("function foo() {", "  var x = () => 1;", "  return x();", "}"),
@@ -1156,26 +1539,36 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testES6ShorthandPropertySyntax05() {
-    test("var {a = 5} = obj;", "var {a: a = 5} = obj;");
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
+    test("var {a = 5} = obj;", "var a; ({a = 5} = obj);");
   }
 
   @Test
   public void testES6ShorthandPropertySyntax06() {
-    test("var {a = 5, b = 3} = obj;", "var {a: a = 5, b: b = 3} = obj;");
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
+    test("var {a = 5, b = 3} = obj;", "var a; var b; ({a = 5, b = 3} = obj);");
   }
 
   @Test
   public void testES6ShorthandPropertySyntax07() {
-    test("var {a: a = 5, b = 3} = obj;", "var {a: a = 5, b: b = 3} = obj;");
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
+    test("var {a: a = 5, b = 3} = obj;", "var a; var b; ({a: a = 5, b: b = 3} = obj);");
   }
 
   @Test
   public void testES6ShorthandPropertySyntax08() {
-    test("var {a, b} = obj;", "var {a: a, b: b} = obj;");
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
+    test("var {a, b} = obj;", "var a; var b; ({a, b} = obj);");
   }
 
   @Test
   public void testES6ShorthandPropertySyntax09() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
     test("({a = 5} = obj);", "({a: a = 5} = obj);");
   }
 
@@ -1191,6 +1584,8 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testES6ShorthandPropertySyntax12() {
+    ignoreWarnings(DiagnosticGroups.GLOBALLY_MISSING_PROPERTIES);
+
     testSame("({a: a = 5} = obj)");
   }
 
@@ -1206,7 +1601,9 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testRewriteExportSpecShorthand2() {
-    test("export {a, b as c, d};", "export {a as a, b as c, d as d};");
+    test(
+        "let a, b, d; export {a, b as c, d};",
+        "let a; let b; let d;export {a as a, b as c, d as d};");
   }
 
   @Test
@@ -1223,12 +1620,17 @@ public final class NormalizeTest extends CompilerTestCase {
 
   @Test
   public void testSplitExportDeclarationWithDestructuring() {
-    test("export var {} = {};", "var {} = {}; export {};");
+    ignoreWarnings(DiagnosticGroups.MISSING_PROPERTIES);
+
+    test("export var {} = {};", "({} = {}); export {};");
     test(
-        lines("let obj = {a: 3, b: 2};", "export var {a, b: d, e: f = 2} = obj;"),
         lines(
-            "let obj = {a: 3, b: 2};",
-            "var {a: a, b: d, e: f = 2} = obj;",
+            "let obj = {a: 3, b: 2};", //
+            "export var {a, b: d, e: f = 2} = obj;"),
+        lines(
+            "let obj = {a: 3, b: 2};", //
+            "var a; var d; var f; ",
+            "({a: a, b: d, e: f = 2} = obj);",
             "export {a as a, d as d, f as f};"));
   }
 

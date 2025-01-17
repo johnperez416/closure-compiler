@@ -15,7 +15,6 @@
  */
 package com.google.javascript.jscomp.testing;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.collect.ImmutableSet;
 import com.google.javascript.jscomp.Compiler;
 import com.google.javascript.jscomp.ErrorManager;
@@ -25,7 +24,7 @@ import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStream;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 /** A Compiler that records requested runtime libraries, rather than injecting. */
@@ -39,7 +38,7 @@ public class NoninjectingCompiler extends Compiler {
     super();
   }
 
-  private final Set<String> injected = new HashSet<>();
+  private final Set<String> injected = new LinkedHashSet<>();
 
   @Override
   public Node ensureLibraryInjected(String library, boolean force) {
@@ -48,7 +47,6 @@ public class NoninjectingCompiler extends Compiler {
   }
 
   @Override
-  @GwtIncompatible
   public final void saveState(OutputStream outputStream) throws IOException {
     ObjectOutputStream out = new ObjectOutputStream(outputStream);
     out.writeObject(injected);
@@ -59,7 +57,6 @@ public class NoninjectingCompiler extends Compiler {
 
   @SuppressWarnings("unchecked")
   @Override
-  @GwtIncompatible
   public final void restoreState(InputStream inputStream)
       throws IOException, ClassNotFoundException {
     ObjectInputStream in = new ObjectInputStream(inputStream);

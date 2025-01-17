@@ -19,7 +19,6 @@ package com.google.javascript.jscomp;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
-import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.type.FlowScope;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
@@ -29,10 +28,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for LinkedFlowScope.
- *
- */
+/** Tests for LinkedFlowScope. */
 @RunWith(JUnit4.class)
 public final class LinkedFlowScopeTest extends CompilerTypeTestCase {
 
@@ -44,6 +40,7 @@ public final class LinkedFlowScopeTest extends CompilerTypeTestCase {
 
   @SuppressWarnings("unused")
   private FlowScope globalEntry;
+
   private FlowScope localEntry;
 
   @Override
@@ -223,8 +220,10 @@ public final class LinkedFlowScopeTest extends CompilerTypeTestCase {
     assertThat(a).isEqualTo(b);
   }
 
-  @SuppressWarnings("unchecked")
   private FlowScope join(FlowScope a, FlowScope b) {
-    return new LinkedFlowScope.FlowScopeJoinOp(compiler).apply(ImmutableList.of(a, b));
+    LinkedFlowScope.FlowScopeJoinOp joiner = new LinkedFlowScope.FlowScopeJoinOp(compiler);
+    joiner.joinFlow(a);
+    joiner.joinFlow(b);
+    return joiner.finish();
   }
 }

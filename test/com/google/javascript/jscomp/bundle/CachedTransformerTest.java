@@ -17,11 +17,9 @@
 package com.google.javascript.jscomp.bundle;
 
 import static com.google.common.truth.Truth.assertThat;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.cache.CacheBuilder;
 import java.util.function.Function;
 import org.junit.Before;
@@ -32,7 +30,6 @@ import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
 /** Tests for {@link Source} and its nested classes. */
-@GwtIncompatible
 @RunWith(JUnit4.class)
 public final class CachedTransformerTest {
 
@@ -67,6 +64,6 @@ public final class CachedTransformerTest {
 
     assertThat(cached.transform(FOO)).isSameInstanceAs(BAR);
     assertThat(cached.transform(FOO)).isSameInstanceAs(BAR);
-    verify(delegate, times(1)).apply(FOO);
+    verify(delegate).apply(FOO);
   }
 }

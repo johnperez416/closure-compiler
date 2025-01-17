@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import com.google.javascript.jscomp.CompilerOptions.PropertyCollapseLevel;
 import com.google.javascript.jscomp.CompilerOptions.Reach;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A CompilationLevel represents the level of optimization that should be
@@ -49,7 +50,7 @@ public enum CompilationLevel {
   ADVANCED_OPTIMIZATIONS,
   ;
 
-  public static CompilationLevel fromString(String value) {
+  public static @Nullable CompilationLevel fromString(String value) {
     if (value == null) {
       return null;
     }
@@ -85,8 +86,6 @@ public enum CompilationLevel {
       case ADVANCED_OPTIMIZATIONS:
         applyFullCompilationOptions(options);
         break;
-      default:
-        throw new RuntimeException("Unknown compilation level.");
     }
   }
 
@@ -131,8 +130,6 @@ public enum CompilationLevel {
     options.setCollapseVariableDeclarations(true);
     options.convertToDottedProperties = true;
     options.labelRenaming = true;
-    options.setRemoveDeadCode(true);
-    options.setOptimizeArgumentsArray(true);
     options.setRemoveUnusedVariables(Reach.LOCAL_ONLY);
     options.collapseObjectLiterals = true;
     options.setProtectHiddenSideEffects(true);
@@ -162,8 +159,6 @@ public enum CompilationLevel {
     options.setCollapseVariableDeclarations(true);
     options.setConvertToDottedProperties(true);
     options.setLabelRenaming(true);
-    options.setRemoveDeadCode(true);
-    options.setOptimizeArgumentsArray(true);
     options.setCollapseObjectLiterals(true);
     options.setProtectHiddenSideEffects(true);
 

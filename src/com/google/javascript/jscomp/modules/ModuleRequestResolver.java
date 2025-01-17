@@ -15,7 +15,7 @@
  */
 package com.google.javascript.jscomp.modules;
 
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** Resolves requests for other modules. */
 public interface ModuleRequestResolver {

@@ -39,22 +39,155 @@
 package com.google.javascript.rhino;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.rhino.testing.Asserts.assertThrows;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
+import static org.junit.Assert.assertThrows;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.javascript.jscomp.colors.StandardColors;
 import com.google.javascript.jscomp.serialization.NodeProperty;
+import com.google.javascript.rhino.Node.SideEffectFlags;
 import com.google.javascript.rhino.jstype.JSTypeNative;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.testing.TestErrorReporter;
 import java.math.BigInteger;
-import java.util.EnumSet;
+import java.util.function.Consumer;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
 public class NodeTest {
+  @Test
+  public void testValidatePropertiesForRoot() {
+    final Node n = IR.root();
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+
+    // ROOT nodes shouldn't have properties, not even a source file
+    n.setSourceFileForTesting("file.js");
+    assertThat(getMessagesFromValidateProperties(n)).containsExactly("ROOT has properties");
+  }
+
+  private ImmutableList<String> getMessagesFromValidateProperties(Node n) {
+    final ImmutableList.Builder<String> listBuilder = ImmutableList.builder();
+    Consumer<String> violationMessageConsumer = listBuilder::add;
+    n.validateProperties(violationMessageConsumer);
+
+    return listBuilder.build();
+  }
+
+  @Test
+  public void testSideEffectFlagsSerialization() {
+    // Test each individual flag
+    checkSideEffectFlagsRoundTrip(SideEffectFlags.MUTATES_GLOBAL_STATE);
+    checkSideEffectFlagsRoundTrip(SideEffectFlags.MUTATES_THIS);
+    checkSideEffectFlagsRoundTrip(SideEffectFlags.MUTATES_ARGUMENTS);
+    checkSideEffectFlagsRoundTrip(SideEffectFlags.THROWS);
+    // Test an arbitrary combination of 2 flags
+    checkSideEffectFlagsRoundTrip(SideEffectFlags.THROWS | SideEffectFlags.MUTATES_THIS);
+  }
+
+  public void checkSideEffectFlagsRoundTrip(int testFlags) {
+    final Node original = IR.call(IR.name("f"));
+    // serialization only works for nodes that actually have a source file,
+    // because in actual execution they always must have that.
+    original.setSourceFileForTesting("sourcefile");
+
+    // Simulate the situation where we've deserialized the node itself, but not its non-source-file
+    // properties yet, by cloning the orignal node before adding the side effect flags to it.
+    final Node restored = original.cloneNode();
+
+    original.setSideEffectFlags(testFlags);
+    final long serializedProperties = original.serializeProperties();
+
+    restored.deserializeProperties(serializedProperties);
+    assertThat(restored.getSideEffectFlags()).isEqualTo(testFlags);
+  }
+
+  @Test
+  public void testValidatePropertiesForIsParenthesized() {
+    Node n = IR.string("");
+    n.setSourceFileForTesting("file.js"); // avoid error about missing source file
+
+    n.setIsParenthesized(true);
+    n.setToken(Token.STRING_KEY);
+    assertThat(getMessagesFromValidateProperties(n))
+        .containsExactly("non-expression is parenthesized");
+  }
+
+  @Test
+  public void testValidatePropertiesForFunctionProperties() {
+    Node n = IR.empty();
+    n.setSourceFileForTesting("file.js"); // avoid error about missing source file
+
+    // Change the Node type so we won't get thrown errors when we try to set the function-only
+    // properties.
+    n.setToken(Token.FUNCTION);
+    n.setIsArrowFunction(true);
+    n.setIsAsyncFunction(true);
+
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.EMPTY);
+    assertThat(getMessagesFromValidateProperties(n))
+        .containsExactly("invalid ARROW_FN prop", "invalid ASYNC_FN prop");
+  }
+
+  @Test
+  public void testValidatePropertiesForSyntheticProperty() {
+    Node n = IR.block();
+    n.setSourceFileForTesting("file.js"); // avoid error about missing source file
+    n.setIsSyntheticBlock(true);
+
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.EMPTY);
+    assertThat(getMessagesFromValidateProperties(n)).containsExactly("invalid SYNTHETIC prop");
+  }
+
+  @Test
+  public void testValidatePropertiesForColorFromCast() {
+    Node n = IR.name("a");
+    n.setSourceFileForTesting("file.js"); // avoid error about missing source file
+    n.setColor(StandardColors.NUMBER);
+    n.setColorFromTypeCast();
+
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setColor(null);
+    assertThat(getMessagesFromValidateProperties(n))
+        .containsExactly("COLOR_FROM_CAST with no Color");
+  }
+
+  @Test
+  public void testValidatePropertiesForOptChain() {
+    Node n = IR.empty();
+    n.setSourceFileForTesting("file.js"); // avoid error about missing source file
+
+    n.setToken(Token.OPTCHAIN_CALL);
+    n.setIsOptionalChainStart(true);
+
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.OPTCHAIN_GETELEM);
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.OPTCHAIN_GETELEM);
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.EMPTY);
+    assertThat(getMessagesFromValidateProperties(n))
+        .containsExactly("START_OF_OPT_CHAIN on non-optional Node");
+  }
+
+  @Test
+  public void testValidatePropertiesForConstVarFlags() {
+    Node n = IR.name("a");
+    n.setSourceFileForTesting("file.js"); // avoid error about missing source file
+    n.setDeclaredConstantVar(true);
+    n.setInferredConstantVar(true);
+
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.IMPORT_STAR);
+    assertThat(getMessagesFromValidateProperties(n)).isEmpty();
+    n.setToken(Token.STRINGLIT);
+    assertThat(getMessagesFromValidateProperties(n)).containsExactly("invalid CONST_VAR_FLAGS");
+  }
+
   @Test
   public void testLinenoCharnoNormal() {
     assertLinenoCharno(5, 6, 5, 6);
@@ -159,14 +292,6 @@ public class NodeTest {
     assertThat(exportAllFrom.isEquivalentTo(exportDefault)).isFalse();
     assertThat(exportAllFrom.isEquivalentTo(simpleExport)).isFalse();
     assertThat(exportDefault.isEquivalentTo(simpleExport)).isFalse();
-  }
-
-  @Test
-  public void testIsEquivalentTo_withSlashV_isDifferent() {
-    Node node1 = Node.newString("\u000B");
-    node1.putBooleanProp(Node.SLASH_V, true);
-    Node node2 = Node.newString("\u000B");
-    assertThat(node1.isEquivalentTo(node2)).isFalse();
   }
 
   @Test
@@ -588,39 +713,53 @@ public class NodeTest {
     assertThat(nodeClone.getBooleanProp(Node.IS_CONSTANT_NAME)).isTrue();
   }
 
+  private long bitsetFromNodeProperties(ImmutableSet<NodeProperty> props) {
+    long bitset = 0;
+    for (NodeProperty prop : props) {
+      bitset = Node.setNodePropertyBit(bitset, prop);
+    }
+    return bitset;
+  }
+
   @Test
   public void testSerializeProperties() {
     Node node = IR.function(IR.name(""), IR.paramList(), IR.block());
     node.setIsAsyncFunction(true);
     node.setIsGeneratorFunction(true);
-    EnumSet<NodeProperty> result = node.serializeProperties();
-    assertThat(result).containsExactly(NodeProperty.GENERATOR_FN, NodeProperty.ASYNC_FN);
+    long result = node.serializeProperties();
+
+    assertThat(result)
+        .isEqualTo(
+            bitsetFromNodeProperties(
+                ImmutableSet.of(NodeProperty.GENERATOR_FN, NodeProperty.ASYNC_FN)));
   }
 
   @Test
   public void testSerializeProperties_isDeclaredConstant() {
     Node node = new Node(Token.NAME);
     node.setDeclaredConstantVar(true);
-    EnumSet<NodeProperty> result = node.serializeProperties();
-    assertThat(result).containsExactly(NodeProperty.IS_DECLARED_CONSTANT);
+    long result = node.serializeProperties();
+    assertThat(result)
+        .isEqualTo(bitsetFromNodeProperties(ImmutableSet.of(NodeProperty.IS_DECLARED_CONSTANT)));
   }
 
   @Test
   public void testSerializeProperties_isInferredConstant() {
     Node node = new Node(Token.NAME);
     node.setInferredConstantVar(true);
-    EnumSet<NodeProperty> result = node.serializeProperties();
-    assertThat(result).containsExactly(NodeProperty.IS_INFERRED_CONSTANT);
+    long result = node.serializeProperties();
+    assertThat(result)
+        .isEqualTo(bitsetFromNodeProperties(ImmutableSet.of(NodeProperty.IS_INFERRED_CONSTANT)));
   }
 
   @Test
   public void testSerializeProperties_untranslatableRhinoProp() {
     Node node = getCall("A");
-    node.setSideEffectFlags(2);
-    EnumSet<NodeProperty> result = node.serializeProperties();
-    // Rhino node prop SIDE_EFFECT_FLAGS does not have a corresponding NodeProperty
-    assertThat(node.getSideEffectFlags()).isEqualTo(2);
-    assertThat(result).isEmpty();
+    node.setUseStrict(true);
+    long result = node.serializeProperties();
+    // Rhino node prop USE_STRICT does not have a corresponding NodeProperty
+    assertThat(node.isUseStrict()).isTrue();
+    assertThat(result).isEqualTo(0);
   }
 
   @Test
@@ -629,9 +768,10 @@ public class NodeTest {
     JSTypeRegistry registry = new JSTypeRegistry(testErrorReporter);
     Node node = Node.newString(Token.NAME, "f");
     node.setJSTypeBeforeCast(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
-    EnumSet<NodeProperty> result = node.serializeProperties();
+    long result = node.serializeProperties();
     // Special case: Rhino node prop TYPE_BEFORE_CAST is converted to NodeProperty.COLOR_FROM_CAST
-    assertThat(result).containsExactly(NodeProperty.COLOR_FROM_CAST);
+    assertThat(result)
+        .isEqualTo(bitsetFromNodeProperties(ImmutableSet.of(NodeProperty.COLOR_FROM_CAST)));
   }
 
   @Test

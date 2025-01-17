@@ -19,9 +19,8 @@ package com.google.javascript.jscomp.integration;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.javascript.jscomp.base.JSCompStrings.lines;
-import static com.google.javascript.rhino.testing.Asserts.assertThrows;
+import static org.junit.Assert.assertThrows;
 
-import com.google.common.annotations.GwtIncompatible;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -37,7 +36,6 @@ import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
-@GwtIncompatible("FileInstrumentationData")
 public final class ProductionCoverageInstrumentationPassIntegrationTest
     extends IntegrationTestCase {
 
@@ -466,7 +464,6 @@ public final class ProductionCoverageInstrumentationPassIntegrationTest
                 .buildExternsFile("externs"));
   }
 
-  @Override
   public CompilerOptions createCompilerOptions() {
     CompilerOptions options = new CompilerOptions();
 

@@ -16,7 +16,6 @@
 
 package com.google.javascript.jscomp;
 
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
 import com.google.javascript.rhino.Node;
 import java.util.Comparator;
@@ -119,16 +118,13 @@ public class ControlFlowGraph<N> extends
   }
 
   /**
-   * Abstract callback to visit a control flow graph node without going into
-   * subtrees of the node that are also represented by other
-   * control flow graph nodes.
+   * Abstract callback to visit a control flow graph node without going into subtrees of the node
+   * that are also represented by other control flow graph nodes.
    *
-   * <p>For example, traversing an IF node as root will visit the two subtrees
-   * pointed by the {@link ControlFlowGraph.Branch#ON_TRUE} and
-   * {@link ControlFlowGraph.Branch#ON_FALSE} edges.
+   * <p>For example, traversing an IF node as root will visit the two subtrees pointed by the {@link
+   * ControlFlowGraph.Branch#ON_TRUE} and {@link ControlFlowGraph.Branch#ON_FALSE} edges.
    */
-  public abstract static class AbstractCfgNodeTraversalCallback implements
-      Callback {
+  public abstract static class AbstractCfgNodeTraversalCallback implements NodeTraversal.Callback {
     @Override
     public final boolean shouldTraverse(NodeTraversal nodeTraversal, Node n,
         Node parent) {
@@ -150,6 +146,7 @@ public class ControlFlowGraph<N> extends
       case ROOT:
       case SCRIPT:
       case TRY:
+      case SWITCH_BODY:
         return true;
       case FUNCTION:
         // A function node represents the start of a function where the name
@@ -180,11 +177,10 @@ public class ControlFlowGraph<N> extends
         // TODO(user): Investigate how we should handle the case where
         // we have a very complex expression inside the FOR-IN header.
         return n != parent.getFirstChild();
-      case SWITCH:
       case CASE:
       case CATCH:
       case WITH:
-        return n != parent.getFirstChild();
+        return n != parent.getFirstChild(); // exclude the condition
       default:
         return false;
     }

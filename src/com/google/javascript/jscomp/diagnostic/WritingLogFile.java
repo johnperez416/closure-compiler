@@ -16,11 +16,18 @@
 
 package com.google.javascript.jscomp.diagnostic;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
 import com.google.errorprone.annotations.MustBeClosed;
+import com.google.gson.stream.JsonWriter;
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.nio.charset.CharsetEncoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -39,12 +46,22 @@ final class WritingLogFile extends LogFile {
     try {
       Path dir = file.getParent();
       Files.createDirectories(dir);
+      CharsetEncoder encoder = UTF_8.newEncoder();
+      // Allow the logged string to contain invalid Unicode (replace invalid character sequences
+      // but don't throw). This is useful in cases where the source code contains invalid Unicode
+      // (e.g., inside strings).
+      encoder
+          .onMalformedInput(CodingErrorAction.REPLACE)
+          .onUnmappableCharacter(CodingErrorAction.REPLACE);
       return new WritingLogFile(
-          Files.newBufferedWriter(
-              file,
-              StandardOpenOption.CREATE,
-              StandardOpenOption.APPEND,
-              StandardOpenOption.WRITE));
+          new BufferedWriter(
+              new OutputStreamWriter(
+                  Files.newOutputStream(
+                      file,
+                      StandardOpenOption.CREATE,
+                      StandardOpenOption.APPEND,
+                      StandardOpenOption.WRITE),
+                  encoder)));
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -87,6 +104,18 @@ final class WritingLogFile extends LogFile {
     return logInternal(LogsGson.toJson(value.get()));
   }
 
+  @CanIgnoreReturnValue
+  @Override
+  public LogFile logJson(StreamedJsonProducer producer) {
+    try (JsonWriter writer = new JsonWriter(this.writer)) {
+      producer.writeJson(writer);
+    } catch (IOException ex) {
+      throw new AssertionError(ex);
+    }
+    return this;
+  }
+
+  @CanIgnoreReturnValue
   private LogFile logInternal(String value) {
     try {
       // It's fine to pass a fully rendered string because we know we're going to use it by the
@@ -105,5 +134,10 @@ final class WritingLogFile extends LogFile {
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
+  }
+
+  @Override
+  public boolean isLogging() {
+    return true;
   }
 }

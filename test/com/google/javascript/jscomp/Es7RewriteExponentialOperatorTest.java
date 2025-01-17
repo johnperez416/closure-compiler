@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 import static com.google.javascript.jscomp.Es7RewriteExponentialOperator.TRANSPILE_EXPONENT_USING_BIGINT;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -33,6 +34,13 @@ public final class Es7RewriteExponentialOperatorTest extends CompilerTestCase {
     super.setUp();
     enableTypeInfoValidation();
     enableTypeCheck();
+    replaceTypesWithColors();
+    enableNormalize();
+    enableMultistageCompilation();
+  }
+
+  public Es7RewriteExponentialOperatorTest() {
+    super(new TestExternsBuilder().addMath().build());
   }
 
   @Override
@@ -75,13 +83,17 @@ public final class Es7RewriteExponentialOperatorTest extends CompilerTestCase {
                 "[$jscomp$exp$assign$tmpindexm1146332801$0], 2);")));
   }
 
-  /** @see <a href="https://github.com/google/closure-compiler/issues/2821">Issue 2821</a> */
+  /**
+   * @see <a href="https://github.com/google/closure-compiler/issues/2821">Issue 2821</a>
+   */
   @Test
   public void testExponentialOperatorInIfCondition() {
     test(srcs("if (2 ** 3 > 0) { }"), expected("if (Math.pow(2, 3) > 0) { }"));
   }
 
-  /** @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a> */
+  /**
+   * @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a>
+   */
   @Test
   public void testExponentialOperatorWithBigIntCall() {
     setAcceptedLanguage(LanguageMode.ECMASCRIPT_2020);
@@ -90,7 +102,9 @@ public final class Es7RewriteExponentialOperatorTest extends CompilerTestCase {
     testError(srcs("let a = BigInt(2) ** BigInt(3);"), TRANSPILE_EXPONENT_USING_BIGINT);
   }
 
-  /** @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a> */
+  /**
+   * @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a>
+   */
   @Test
   public void testAssignExponentialOperatorWithBigIntCall() {
     setAcceptedLanguage(LanguageMode.ECMASCRIPT_2020);
@@ -99,7 +113,9 @@ public final class Es7RewriteExponentialOperatorTest extends CompilerTestCase {
     testError(srcs("let a = 3n; a **= BigInt(2);"), TRANSPILE_EXPONENT_USING_BIGINT);
   }
 
-  /** @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a> */
+  /**
+   * @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a>
+   */
   @Test
   public void testExponentialOperatorWithBigIntCall_noWarningWithoutTypeChecking() {
     setAcceptedLanguage(LanguageMode.ECMASCRIPT_2020);
@@ -114,7 +130,9 @@ public final class Es7RewriteExponentialOperatorTest extends CompilerTestCase {
         expected("let a = Math.pow(BigInt(2), BigInt(3));"));
   }
 
-  /** @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a> */
+  /**
+   * @see <a href="https://github.com/google/closure-compiler/issues/3684">Issue 3684</a>
+   */
   @Test
   public void testExponentialOperatorWithBigIntLiteral() {
     setAcceptedLanguage(LanguageMode.ECMASCRIPT_2020);

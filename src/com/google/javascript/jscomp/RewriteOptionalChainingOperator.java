@@ -15,6 +15,7 @@
  */
 package com.google.javascript.jscomp;
 
+
 import com.google.javascript.jscomp.OptionalChainRewriter.TmpVarNameCreator;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
@@ -53,7 +54,7 @@ final class RewriteOptionalChainingOperator implements CompilerPass {
   @Override
   public void process(Node externs, Node root) {
     NodeTraversal.traverseRoots(compiler, new TranspilationCallback(), externs, root);
-    TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, Feature.OPTIONAL_CHAINING);
+    TranspilationPasses.maybeMarkFeatureAsTranspiledAway(compiler, root, Feature.OPTIONAL_CHAINING);
   }
 
   /** Locates and transpiles all optional chains. */
@@ -68,6 +69,7 @@ final class RewriteOptionalChainingOperator implements CompilerPass {
         // Set the TmpVarNameCreator to be used when rewriting optional chains in this script.
         rewriterBuilder.setTmpVarNameCreator(getTmpVarNameCreatorForInput.apply(t.getInput()));
         FeatureSet scriptFeatures = NodeUtil.getFeatureSetOfScript(n);
+        // ensures that the pass early exits if script does not contain the feature
         return scriptFeatures == null || scriptFeatures.contains(Feature.OPTIONAL_CHAINING);
       }
       return true;

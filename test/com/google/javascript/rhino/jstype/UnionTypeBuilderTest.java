@@ -39,8 +39,8 @@
 package com.google.javascript.rhino.jstype;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.rhino.testing.Asserts.assertThrows;
 import static com.google.javascript.rhino.testing.TypeSubject.assertType;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.javascript.rhino.testing.BaseJSTypeTestCase;
@@ -168,7 +168,7 @@ public class UnionTypeBuilderTest extends BaseJSTypeTestCase {
 
       // NOTE: "(?)" means there are multiple unknown types in the union.
       assertUnion("?", UNKNOWN_TYPE, unresolvedNameA1);
-      assertUnion("(not.resolved.A)", unresolvedNameA1, unresolvedNameA2);
+      assertUnion("(not.resolved.A|not.resolved.A)", unresolvedNameA1, unresolvedNameA2);
       assertUnion("(not.resolved.A|not.resolved.B)", unresolvedNameA1, unresolvedNameB);
       assertUnion("(Object|not.resolved.A)", unresolvedNameA1, OBJECT_TYPE);
     }

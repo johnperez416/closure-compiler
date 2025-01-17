@@ -32,6 +32,7 @@ import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.jscomp.type.ReverseAbstractInterpreter;
 import com.google.javascript.jscomp.type.SemanticReverseAbstractInterpreter;
 import com.google.javascript.rhino.Node;
+import org.jspecify.annotations.Nullable;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -40,9 +41,9 @@ import org.junit.runners.JUnit4;
 /** Unit tests for {@link RewriteDynamicImports} */
 @RunWith(JUnit4.class)
 public class RewriteDynamicImportsTest extends CompilerTestCase {
-  private String dynamicImportAlias = "imprt_";
-  private LanguageMode language = null;
-  private LanguageMode languageIn = null;
+  private @Nullable String dynamicImportAlias = "imprt_";
+  private @Nullable LanguageMode language = null;
+  private @Nullable LanguageMode languageIn = null;
   private ChunkOutputType chunkOutputType = ChunkOutputType.GLOBAL_NAMESPACE;
 
   public RewriteDynamicImportsTest() {
@@ -55,7 +56,6 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     super.setUp();
     enableCreateModuleMap();
     enableTypeInfoValidation();
-    disableScriptFeatureValidation();
   }
 
   @Override
@@ -231,7 +231,6 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
 
   @Test
   public void internalImportDifferentChunksWithoutAlias_used() {
-    disableAstValidation();
     this.dynamicImportAlias = null;
     JSChunk actualChunk0 = new JSChunk("chunk0");
     actualChunk0.add(SourceFile.fromCode("i0.js", "const a = 1; export default a;"));
@@ -260,7 +259,6 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
 
   @Test
   public void internalImportDifferentChunksWithAlias_used() {
-    disableAstValidation();
     JSChunk actualChunk0 = new JSChunk("chunk0");
     actualChunk0.add(SourceFile.fromCode("i0.js", "const a = 1; export default a;"));
 
@@ -349,10 +347,8 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     actualChunk1.add(SourceFile.fromCode("i1.js", "const nsPromise = import('./i0.js');"));
 
     testExternChanges(
-        "",
-        new JSChunk[] {actualChunk0, actualChunk1},
-        "function " + DYNAMIC_IMPORT_CALLBACK_FN + "(importCallback) {}",
-        (DiagnosticType[]) null);
+        srcs(actualChunk0, actualChunk1),
+        expected("function " + DYNAMIC_IMPORT_CALLBACK_FN + "(importCallback) {}"));
   }
 
   @Test
@@ -432,7 +428,6 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
   @Test
   public void outputModulesInternalImportDifferentChunks_used() {
     allowExternsChanges();
-    disableAstValidation();
     this.chunkOutputType = ChunkOutputType.ES_MODULES;
     this.dynamicImportAlias = null;
     JSChunk actualChunk0 = new JSChunk("chunk0");
@@ -473,10 +468,7 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     actualChunk1.add(SourceFile.fromCode("i1.js", "const nsPromise = import('./i0.js');"));
 
     testExternChanges(
-        "",
-        new JSChunk[] {actualChunk0, actualChunk1},
-        "function import_(specifier) {}",
-        (DiagnosticType[]) null);
+        externs(""), srcs(actualChunk0, actualChunk1), expected("function import_(specifier) {}"));
   }
 
   @Test
@@ -529,10 +521,9 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     actualChunk1.add(SourceFile.fromCode("i1.js", "const nsPromise = import('./i0.js');"));
 
     testExternChanges(
-        "function import_() {}",
-        new JSChunk[] {actualChunk0, actualChunk1},
-        "function import_() {}",
-        (DiagnosticType[]) null);
+        externs("function import_() {}"),
+        srcs(actualChunk0, actualChunk1),
+        expected("function import_() {}"));
   }
 
   @Test
@@ -547,10 +538,9 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     actualChunk1.add(SourceFile.fromCode("i1.js", "const nsPromise = import('./i0.js');"));
 
     testExternChanges(
-        "",
-        new JSChunk[] {actualChunk0, actualChunk1},
-        "var foo = {}; foo.import = function(specifier) {};",
-        (DiagnosticType[]) null);
+        externs(""),
+        srcs(actualChunk0, actualChunk1),
+        expected("var foo = {}; foo.import = function(specifier) {};"));
   }
 
   @Test
@@ -565,10 +555,9 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     actualChunk1.add(SourceFile.fromCode("i1.js", "const nsPromise = import('./i0.js');"));
 
     testExternChanges(
-        "var foo = {}; foo.import = function(specifier) {};",
-        new JSChunk[] {actualChunk0, actualChunk1},
-        "var foo = {}; foo.import = function(specifier) {};",
-        (DiagnosticType[]) null);
+        externs("var foo = {}; foo.import = function(specifier) {};"),
+        srcs(actualChunk0, actualChunk1),
+        expected("var foo = {}; foo.import = function(specifier) {};"));
   }
 
   @Test
@@ -583,10 +572,7 @@ public class RewriteDynamicImportsTest extends CompilerTestCase {
     actualChunk1.add(SourceFile.fromCode("i1.js", "const nsPromise = import('./i0.js');"));
 
     testExternChanges(
-        "var foo = {};",
-        new JSChunk[] {actualChunk0, actualChunk1},
-        "var foo = {};",
-        (DiagnosticType[]) null);
+        externs("var foo = {};"), srcs(actualChunk0, actualChunk1), expected("var foo = {};"));
   }
 
   @Test

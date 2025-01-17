@@ -16,18 +16,19 @@
 
 package com.google.javascript.jscomp;
 
-import com.google.common.annotations.GwtIncompatible;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
+import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.rhino.Node;
 import com.google.protobuf.Descriptors;
 import com.google.protobuf.TextFormat;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Provides a framework for checking code against a set of user configured conformance rules. The
@@ -38,8 +39,7 @@ import java.util.Set;
  * <p>Conformance violations are both reported as compiler errors, and are also reported separately
  * to the {cI gue@link ErrorManager}
  */
-@GwtIncompatible("com.google.protobuf")
-public final class CheckConformance implements Callback, CompilerPass {
+public final class CheckConformance implements NodeTraversal.Callback, CompilerPass {
   static final DiagnosticType CONFORMANCE_ERROR =
       DiagnosticType.error("JSC_CONFORMANCE_ERROR", "Violation: {0}{1}{2}");
 
@@ -55,53 +55,117 @@ public final class CheckConformance implements Callback, CompilerPass {
           "Invalid requirement. Reason: {0}\nRequirement spec:\n{1}");
 
   private final AbstractCompiler compiler;
-  private final ImmutableList<Rule> rules;
+  private final ImmutableList<Category> categories;
 
   public static interface Rule {
+
+    /**
+     * Return a precondition for this rule.
+     *
+     * <p>This method will only be called once (per rule) during the creation of the
+     * CheckConformance pass. Therefore, the return must be constant.
+     *
+     * <p>Returning null means that there is no precondition. This is convenient, but can be a major
+     * performance hit.
+     */
+    default @Nullable Precondition getPrecondition() {
+      return Precondition.CHECK_ALL;
+    }
+
     /** Perform conformance check */
     void check(NodeTraversal t, Node n);
   }
 
-  /** @param configs The rules to check. */
+  /**
+   * A condition that must be true for a rule to possibly match a node.
+   *
+   * <p>Instances are used as keys to group rules with common preconditions. Grouping allows shared
+   * computation to be done only once per node, which is a substantial performance improvement.
+   */
+  public static interface Precondition {
+    boolean shouldCheck(Node n);
+
+    public static final Precondition CHECK_ALL =
+        new Precondition() {
+          @Override
+          public boolean shouldCheck(Node n) {
+            return true;
+          }
+        };
+  }
+
+  private static final class Category {
+    final Precondition precondition;
+    final ImmutableList<Rule> rules;
+
+    Category(Precondition precondition, ImmutableList<Rule> rules) {
+      this.precondition = precondition;
+      this.rules = rules;
+    }
+  }
+
+  /**
+   * @param configs The rules to check.
+   */
   CheckConformance(AbstractCompiler compiler, ImmutableList<ConformanceConfig> configs) {
     this.compiler = compiler;
     // Initialize the map of functions to inspect for renaming candidates.
-    this.rules = initRules(compiler, configs);
+    this.categories = initRules(compiler, configs);
   }
 
   @Override
   public void process(Node externs, Node root) {
-    if (!rules.isEmpty()) {
+    if (!this.categories.isEmpty()) {
       NodeTraversal.traverseRoots(compiler, this, externs, root);
     }
   }
 
   @Override
   public final boolean shouldTraverse(NodeTraversal t, Node n, Node parent) {
-    // Don't inspect extern files
-    return !n.isScript() || !t.getInput().getSourceFile().isExtern();
+    // Don't inspect extern files, *.tsmes.closure.js, weak sources, or closureUnaware code.
+    return !n.isScript()
+        || (isScriptOfInterest(t.getInput().getSourceFile())
+            && !t.getSourceName().endsWith("tsmes.closure.js"));
+  }
+
+  private boolean isScriptOfInterest(SourceFile sf) {
+    return !sf.isWeak()
+        && !sf.isExtern()
+        && !sf.isClosureUnawareCode();
   }
 
   @Override
   public void visit(NodeTraversal t, Node n, Node parent) {
-    for (int i = 0, len = rules.size(); i < len; i++) {
-      Rule rule = rules.get(i);
-      rule.check(t, n);
+    /*
+     * Use counted loops and backward iteration for performance.
+     *
+     * <p>These loops are run a huge number of times. The overhead of enhanced-for loops and even
+     * calling size() can add seconds of build time to large projects.
+     */
+    for (int c = this.categories.size() - 1; c >= 0; c--) {
+      Category category = this.categories.get(c);
+      if (category.precondition.shouldCheck(n)) {
+        for (int r = category.rules.size() - 1; r >= 0; r--) {
+          category.rules.get(r).check(t, n);
+        }
+      }
     }
   }
 
   /** Build the data structures need by this pass from the provided configurations. */
-  private static ImmutableList<Rule> initRules(
+  private static ImmutableList<Category> initRules(
       AbstractCompiler compiler, ImmutableList<ConformanceConfig> configs) {
-    ImmutableList.Builder<Rule> builder = ImmutableList.builder();
+    HashMultimap<Precondition, Rule> builder = HashMultimap.create();
     List<Requirement> requirements = mergeRequirements(compiler, configs);
     for (Requirement requirement : requirements) {
       Rule rule = initRule(compiler, requirement);
       if (rule != null) {
-        builder.add(rule);
+        builder.put(rule.getPrecondition(), rule);
       }
     }
-    return builder.build();
+    return builder.asMap().entrySet().stream()
+        .map((e) -> new Category(e.getKey(), ImmutableList.copyOf(e.getValue())))
+        .collect(toImmutableList());
   }
 
   private static final ImmutableSet<String> EXTENDABLE_FIELDS =
@@ -123,7 +187,7 @@ public final class CheckConformance implements Callback, CompilerPass {
   static List<Requirement> mergeRequirements(
       AbstractCompiler compiler, List<ConformanceConfig> configs) {
     List<Requirement.Builder> builders = new ArrayList<>();
-    Map<String, Requirement.Builder> extendable = new HashMap<>();
+    Map<String, Requirement.Builder> extendable = new LinkedHashMap<>();
     for (ConformanceConfig config : configs) {
       for (Requirement requirement : config.getRequirementList()) {
         Requirement.Builder builder = requirement.toBuilder();
@@ -192,26 +256,27 @@ public final class CheckConformance implements Callback, CompilerPass {
   }
 
   private static void removeDuplicates(Requirement.Builder requirement) {
-    final Set<String> list1 = ImmutableSet.copyOf(requirement.getWhitelistList());
+    final ImmutableSet<String> list1 = ImmutableSet.copyOf(requirement.getWhitelistList());
     requirement.clearWhitelist().addAllWhitelist(list1);
 
-    final Set<String> allowlist = ImmutableSet.copyOf(requirement.getAllowlistList());
+    final ImmutableSet<String> allowlist = ImmutableSet.copyOf(requirement.getAllowlistList());
     requirement.clearAllowlist().addAllAllowlist(allowlist);
 
-    final Set<String> list2 = ImmutableSet.copyOf(requirement.getWhitelistRegexpList());
+    final ImmutableSet<String> list2 = ImmutableSet.copyOf(requirement.getWhitelistRegexpList());
     requirement.clearWhitelistRegexp().addAllWhitelistRegexp(list2);
 
-    final Set<String> allowlistRegexp = ImmutableSet.copyOf(requirement.getAllowlistRegexpList());
+    final ImmutableSet<String> allowlistRegexp =
+        ImmutableSet.copyOf(requirement.getAllowlistRegexpList());
     requirement.clearAllowlistRegexp().addAllAllowlistRegexp(allowlistRegexp);
 
-    final Set<String> list3 = ImmutableSet.copyOf(requirement.getOnlyApplyToList());
+    final ImmutableSet<String> list3 = ImmutableSet.copyOf(requirement.getOnlyApplyToList());
     requirement.clearOnlyApplyTo().addAllOnlyApplyTo(list3);
 
-    final Set<String> list4 = ImmutableSet.copyOf(requirement.getOnlyApplyToRegexpList());
+    final ImmutableSet<String> list4 = ImmutableSet.copyOf(requirement.getOnlyApplyToRegexpList());
     requirement.clearOnlyApplyToRegexp().addAllOnlyApplyToRegexp(list4);
   }
 
-  private static Rule initRule(AbstractCompiler compiler, Requirement requirement) {
+  private static @Nullable Rule initRule(AbstractCompiler compiler, Requirement requirement) {
     try {
       switch (requirement.getType()) {
         case CUSTOM:
@@ -224,6 +289,10 @@ public final class CheckConformance implements Callback, CompilerPass {
           return new ConformanceRules.BannedDependency(compiler, requirement);
         case BANNED_DEPENDENCY_REGEX:
           return new ConformanceRules.BannedDependencyRegex(compiler, requirement);
+        case BANNED_ENHANCE:
+          return new ConformanceRules.BannedEnhance(compiler, requirement);
+        case BANNED_MODS_REGEX:
+          return new ConformanceRules.BannedModsRegex(compiler, requirement);
         case BANNED_NAME:
         case BANNED_NAME_CALL:
           return new ConformanceRules.BannedName(compiler, requirement);
@@ -239,10 +308,10 @@ public final class CheckConformance implements Callback, CompilerPass {
           return new ConformanceRules.RestrictedMethodCall(compiler, requirement);
         case RESTRICTED_PROPERTY_WRITE:
           return new ConformanceRules.RestrictedPropertyWrite(compiler, requirement);
-        default:
-          reportInvalidRequirement(compiler, requirement, "unknown requirement type");
-          return null;
+        case BANNED_STRING_REGEX:
+          return new ConformanceRules.BannedStringRegex(compiler, requirement);
       }
+      throw new AssertionError();
     } catch (InvalidRequirementSpec e) {
       reportInvalidRequirement(compiler, requirement, e.getMessage());
       return null;
@@ -259,10 +328,10 @@ public final class CheckConformance implements Callback, CompilerPass {
     }
   }
 
-  /** @param requirement */
   private static void reportInvalidRequirement(
       AbstractCompiler compiler, Requirement requirement, String reason) {
     compiler.report(
-        JSError.make(INVALID_REQUIREMENT_SPEC, reason, TextFormat.printToString(requirement)));
+        JSError.make(
+            INVALID_REQUIREMENT_SPEC, reason, TextFormat.printer().printToString(requirement)));
   }
 }

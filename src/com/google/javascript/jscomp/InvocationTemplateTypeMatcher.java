@@ -21,9 +21,10 @@ import static com.google.javascript.rhino.jstype.JSTypeNative.UNKNOWN_TYPE;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
+import com.google.javascript.jscomp.base.LinkedIdentityHashMap;
+import com.google.javascript.jscomp.base.LinkedIdentityHashSet;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.FunctionType.Parameter;
@@ -35,15 +36,13 @@ import com.google.javascript.rhino.jstype.TemplateTypeMap;
 import com.google.javascript.rhino.jstype.TemplatizedType;
 import com.google.javascript.rhino.jstype.UnionType;
 import java.util.Iterator;
-import java.util.Map;
-import java.util.Set;
 
 /**
  * Determines the types that fill any template parameters at a function invocation.
  *
  * <p>Given an invocation of some function with type `F` templated on `T`, this class traverses the
  * arguments of the invocation to determine what type `T` should be. Argument types and `F`'s
- * paramater types are traversed/recursed in parallel to match template types at any depth inside
+ * parameter types are traversed/recursed in parallel to match template types at any depth inside
  * `F`'s signature.
  *
  * <p>Instances of this class are single use. They provide a "scope" for the matching but accumulate
@@ -51,8 +50,9 @@ import java.util.Set;
  */
 final class InvocationTemplateTypeMatcher {
 
-  private final Map<TemplateType, JSType> matchedTypes = Maps.newIdentityHashMap();
-  private final Set<JSType> seenTypes = Sets.newIdentityHashSet();
+  private final LinkedIdentityHashMap<TemplateType, JSType> matchedTypes =
+      new LinkedIdentityHashMap<>();
+  private final LinkedIdentityHashSet<JSType> seenTypes = new LinkedIdentityHashSet<>();
 
   private final JSTypeRegistry registry;
   private final FunctionType calleeType;
@@ -98,7 +98,7 @@ final class InvocationTemplateTypeMatcher {
       Iterator<Parameter> calleeParameters = this.calleeType.getParameters().iterator();
       if (!calleeParameters.hasNext()) {
         // TypeCheck will warn if there are too few function parameters
-        return ImmutableMap.copyOf(this.matchedTypes);
+        return this.copyMatchedTypes();
       }
 
       // The first argument to the tag function is an array of strings (typed as ITemplateArray)
@@ -115,7 +115,7 @@ final class InvocationTemplateTypeMatcher {
           this.calleeType.getParameters(), NodeUtil.getInvocationArgsAsIterable(this.invocation));
     }
 
-    return ImmutableMap.copyOf(this.matchedTypes);
+    return this.copyMatchedTypes();
   }
 
   private void matchTemplateTypesRecursive(JSType paramType, JSType argType) {
@@ -166,7 +166,7 @@ final class InvocationTemplateTypeMatcher {
         if (argObjectType != null
             && !argObjectType.isUnknownType()
             && !argObjectType.isEmptyType()) {
-          Set<String> names = paramRecordType.getPropertyNames();
+          ImmutableSortedSet<String> names = paramRecordType.getPropertyNames();
           for (String name : names) {
             if (paramRecordType.hasOwnProperty(name) && argObjectType.hasProperty(name)) {
               this.matchTemplateTypesRecursive(
@@ -186,21 +186,16 @@ final class InvocationTemplateTypeMatcher {
         return;
       }
 
-      ObjectType referencedParamType = templatizedParamType.getReferencedType();
       JSType argObjectType = argType.restrictByNotNullOrUndefined().collapseUnion();
+      // Resolve any template types in common between the argument type and parameter type
+      TemplateTypeMap paramTypeMap = paramType.getTemplateTypeMap();
 
-      if (argObjectType.isSubtypeOf(referencedParamType)) {
-        // If the argument type is a subtype of the parameter type, resolve any
-        // template types amongst their templatized types.
-        TemplateTypeMap paramTypeMap = paramType.getTemplateTypeMap();
-
-        ImmutableList<TemplateType> keys = paramTypeMap.getTemplateKeys();
-        TemplateTypeMap argTypeMap = argObjectType.getTemplateTypeMap();
-        for (int index = keys.size() - keyCount; index < keys.size(); index++) {
-          TemplateType key = keys.get(index);
-          this.matchTemplateTypesRecursive(
-              paramTypeMap.getResolvedTemplateType(key), argTypeMap.getResolvedTemplateType(key));
-        }
+      ImmutableList<TemplateType> keys = paramTypeMap.getTemplateKeys();
+      TemplateTypeMap argTypeMap = argObjectType.getTemplateTypeMap();
+      for (int index = keys.size() - keyCount; index < keys.size(); index++) {
+        TemplateType key = keys.get(index);
+        this.matchTemplateTypesRecursive(
+            paramTypeMap.getResolvedTemplateType(key), argTypeMap.getResolvedTemplateType(key));
       }
     }
   }
@@ -247,6 +242,12 @@ final class InvocationTemplateTypeMatcher {
 
     // Don't worry about checking bounds here. We'll validate them once they're all collected.
     this.matchedTypes.merge(template, match, JSType::getLeastSupertype);
+  }
+
+  private ImmutableMap<TemplateType, JSType> copyMatchedTypes() {
+    ImmutableMap.Builder<TemplateType, JSType> builder = ImmutableMap.builder();
+    this.matchedTypes.forEach(builder::put);
+    return builder.buildOrThrow();
   }
 
   private final JSType getTypeOrUnknown(Node n) {

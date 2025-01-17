@@ -81,7 +81,7 @@ public class AstAnalyzer {
   /**
    * Returns true if the node may create new mutable state, or change existing state.
    *
-   * @see <a href="http://www.xkcd.org/326/">XKCD Cartoon</a>
+   * @see <a href="http://www.xkcd.com/326/">XKCD Cartoon</a>
    */
   boolean mayEffectMutableState(Node n) {
     return checkForStateChangeHelper(n, /* checkForNewObjects= */ true);
@@ -278,11 +278,11 @@ public class AstAnalyzer {
 
       case OBJECT_REST:
       case OBJECT_SPREAD:
-          // Object-rest and object-spread may trigger a getter.
-          if (assumeGettersArePure) {
-            break; // We still need to inspect the children.
-          }
-          return true;
+        // Object-rest and object-spread may trigger a getter.
+        if (assumeGettersArePure) {
+          break; // We still need to inspect the children.
+        }
+        return true;
 
       case ITER_REST:
       case ITER_SPREAD:
@@ -311,6 +311,32 @@ public class AstAnalyzer {
         // simply defining a member function, getter, or setter has no side effects
         return false;
 
+      case COMPUTED_PROP:
+        if (n.getParent().isClassMembers()) {
+          return checkForStateChangeHelper(n.getFirstChild(), checkForNewObjects);
+        }
+        if (parent.isObjectPattern() && parent.getLastChild().isObjectRest()) {
+          // Due to language syntax, only the last child can be an OBJECT_REST.
+          // `({ ['thisKey']: target, ...rest} = something())`
+          // The presence of `thisKey` affects what properties get put into `rest`.
+          return true;
+        }
+        break; // Assume that COMPUTED_PROP keys in OBJECT_PATTERN never trigger getters.
+      case MEMBER_FIELD_DEF:
+        if (n.isStaticMember()
+            && n.hasChildren()
+            && checkForStateChangeHelper(n.getFirstChild(), checkForNewObjects)) {
+          return true;
+        }
+        return false;
+      case COMPUTED_FIELD_DEF:
+        if (checkForStateChangeHelper(n.getFirstChild(), checkForNewObjects)
+            || (n.isStaticMember()
+                && n.getSecondChild() != null
+                && checkForStateChangeHelper(n.getSecondChild(), checkForNewObjects))) {
+          return true;
+        }
+        return false;
       case CLASS:
         return checkForNewObjects
             || NodeUtil.isClassDeclaration(n)
@@ -321,8 +347,7 @@ public class AstAnalyzer {
 
       case CLASS_MEMBERS:
         for (Node member = n.getFirstChild(); member != null; member = member.getNext()) {
-          if (member.isComputedProp()
-              && checkForStateChangeHelper(member.getFirstChild(), checkForNewObjects)) {
+          if (checkForStateChangeHelper(member, checkForNewObjects)) {
             return true;
           }
         }
@@ -352,8 +377,11 @@ public class AstAnalyzer {
         return true;
 
       case TAGGED_TEMPLATELIT:
-        // TODO(b/128527671): Inspect the children of the expression for side-effects.
-        return functionCallHasSideEffects(n);
+        if (functionCallHasSideEffects(n)) {
+          return true;
+        }
+        // Need to look at the children for their possible side-effects.
+        break;
 
       case CAST:
       case AND:
@@ -381,9 +409,7 @@ public class AstAnalyzer {
       case EMPTY:
       case TEMPLATELIT:
       case TEMPLATELIT_STRING:
-      case COMPUTED_PROP: // Assume that COMPUTED_PROP keys in OBJECT_PATTERN never trigger getters.
         break;
-
       case STRING_KEY:
         if (parent.isObjectPattern()) {
           // This STRING_KEY names a property being read from.
@@ -417,7 +443,7 @@ public class AstAnalyzer {
         break;
 
       default:
-        if (NodeUtil.isSimpleOperator(n)) {
+        if (NodeUtil.isSimpleOperator(n) || n.isGetProp() || n.isGetElem()) {
           break;
         }
 

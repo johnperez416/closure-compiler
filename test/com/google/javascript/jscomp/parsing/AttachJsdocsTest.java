@@ -16,6 +16,7 @@
 
 package com.google.javascript.jscomp.parsing;
 
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
@@ -37,7 +38,7 @@ import org.junit.runners.JUnit4;
 /** Ported from rhino/testsrc/org/mozilla/javascript/tests/AttachJsDocsTest.java */
 @RunWith(JUnit4.class)
 public final class AttachJsdocsTest extends BaseJSTypeTestCase {
-  private Config.LanguageMode mode;
+  private LanguageMode mode;
 
   @Before
   public void setUp() throws Exception {
@@ -74,8 +75,7 @@ public final class AttachJsdocsTest extends BaseJSTypeTestCase {
 
   @Test
   public void testOldJsdocAssign3() {
-    Node root =
-        parse("/** @const */ var g = {}; /** @type {number} */ (g.foo) = 3;");
+    Node root = parse("/** @const */ var g = {}; /** @type {number} */ (g.foo) = 3;");
     Node assign = root.getLastChild().getFirstChild();
     assertThat(assign.getFirstChild().getJSDocInfo()).isNotNull();
   }
@@ -223,10 +223,7 @@ public final class AttachJsdocsTest extends BaseJSTypeTestCase {
 
   @Test
   public void testOldJsdocDot2() {
-    Node root = parse(
-        "/** attach */\n" +
-        "// test\n" +
-        "a.b = {};");
+    Node root = parse("/** attach */\n" + "// test\n" + "a.b = {};");
     assertThat(root.getFirstFirstChild().getJSDocInfo()).isNotNull();
   }
 
@@ -523,9 +520,9 @@ public final class AttachJsdocsTest extends BaseJSTypeTestCase {
 
   @Test
   public void testJsdocHook1() {
-     Node root = parse("/** attach */ (true) ? 1 : 2;");
-     Node hook = root.getFirstFirstChild();
-     assertThat(hook.getFirstChild().getJSDocInfo()).isNotNull();
+    Node root = parse("/** attach */ (true) ? 1 : 2;");
+    Node hook = root.getFirstFirstChild();
+    assertThat(hook.getFirstChild().getJSDocInfo()).isNotNull();
   }
 
   @Test
@@ -725,47 +722,55 @@ public final class AttachJsdocsTest extends BaseJSTypeTestCase {
   public void testOldJsdocSwitch2() {
     Node root = parse("switch (x) { /** don't attach */ case 1: ; }");
     Node sw = root.getFirstChild();
-    assertThat(sw.getSecondChild().getJSDocInfo()).isNull();
+    Node caseNode = sw.getSecondChild().getFirstChild();
+    checkState(caseNode.isCase(), caseNode);
+    assertThat(caseNode.getJSDocInfo()).isNull();
   }
 
   @Test
   public void testOldJsdocSwitch3() {
     Node root = parse("switch (x) { case /** attach */ 1: ; }");
     Node sw = root.getFirstChild();
-    assertThat(sw.getSecondChild().getFirstChild().getJSDocInfo()).isNotNull();
+    Node numberNode = sw.getSecondChild().getFirstFirstChild();
+    checkState(numberNode.isNumber(), numberNode);
+    assertThat(numberNode.getJSDocInfo()).isNotNull();
   }
 
   @Test
   public void testOldJsdocSwitch4() {
     Node root = parse("switch (x) { case 1: /** don't attach */ {}; }");
     Node sw = root.getFirstChild();
-    assertThat(sw.getSecondChild().getLastChild().getJSDocInfo()).isNull();
+    Node caseBlock = sw.getSecondChild().getOnlyChild().getLastChild();
+    checkState(caseBlock.isBlock(), caseBlock);
+    assertThat(caseBlock.getJSDocInfo()).isNull();
   }
 
   @Test
   public void testOldJsdocSwitch5() {
     Node root = parse("switch (x) { default: /** don't attach */ {}; }");
     Node sw = root.getFirstChild();
-    assertThat(sw.getSecondChild().getLastChild().getJSDocInfo()).isNull();
+    Node defaultBlock = sw.getSecondChild().getOnlyChild().getLastChild();
+    checkState(defaultBlock.isBlock(), defaultBlock);
+    assertThat(defaultBlock.getJSDocInfo()).isNull();
   }
 
   @Test
   public void testOldJsdocSwitch6() {
     Node root = parse("switch (x) { case 1: /** don't attach */ }");
     Node sw = root.getFirstChild();
+    Node caseBlock = sw.getSecondChild().getOnlyChild().getLastChild();
+    checkState(caseBlock.isBlock(), caseBlock);
     assertThat(sw.getSecondChild().getLastChild().getJSDocInfo()).isNull();
   }
 
   @Test
   public void testOldJsdocSwitch7() {
-    Node root = parse(
-        "switch (x) {" +
-        "  case 1: " +
-        "    /** attach */ y;" +
-        "    /** attach */ z;" +
-        "}");
+    Node root =
+        parse(
+            "switch (x) {" + "  case 1: " + "    /** attach */ y;" + "    /** attach */ z;" + "}");
     Node sw = root.getFirstChild();
-    Node caseBody = sw.getSecondChild().getLastChild();
+    Node caseBody = sw.getSecondChild().getLastChild().getLastChild();
+    checkState(caseBody.isBlock(), caseBody);
     assertThat(caseBody.getFirstFirstChild().getJSDocInfo()).isNotNull();
     assertThat(caseBody.getSecondChild().getFirstChild().getJSDocInfo()).isNotNull();
   }
@@ -890,19 +895,18 @@ public final class AttachJsdocsTest extends BaseJSTypeTestCase {
 
   @Test
   public void testOldJsdocWith4() {
-    Node root = parse(
-        "/** @suppress {with} */ with (context) {\n" +
-        "  eval('[' + expr + ']');\n" +
-        "}\n");
+    Node root =
+        parse("/** @suppress {with} */ with (context) {\n" + "  eval('[' + expr + ']');\n" + "}\n");
     assertThat(root.getFirstChild().getJSDocInfo()).isNotNull();
   }
 
   @Test
   public void testOldJsdocManyComments1() {
-    Node root = parse(
-        "function /** number */ f(/** number */ x, /** number */ y) {\n" +
-        "  return x + y;\n" +
-        "}");
+    Node root =
+        parse(
+            "function /** number */ f(/** number */ x, /** number */ y) {\n"
+                + "  return x + y;\n"
+                + "}");
     Node fun = root.getFirstChild();
     assertThat(fun.getFirstChild().getJSDocInfo()).isNotNull();
     assertThat(fun.getSecondChild().getFirstChild().getJSDocInfo()).isNotNull();

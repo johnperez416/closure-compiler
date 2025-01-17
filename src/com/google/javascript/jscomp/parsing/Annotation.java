@@ -17,11 +17,9 @@
 package com.google.javascript.jscomp.parsing;
 
 import com.google.common.collect.ImmutableMap;
-import java.util.Map;
 
 /** All natively recognized JSDoc annotations. */
 enum Annotation {
-  NG_INJECT,
   ABSTRACT,
   ALTERNATE_MESSAGE_ID,
   AUTHOR,
@@ -35,30 +33,43 @@ enum Annotation {
   DEPRECATED,
   DESC,
   DICT,
+  REQUIRE_INLINING,
+  ENHANCE,
   ENUM,
   EXTENDS,
   EXTERNS,
   EXPORT,
   FILE_OVERVIEW,
   FINAL,
-  HIDDEN,
   IDGENERATOR,
   IMPLEMENTS,
   IMPLICIT_CAST,
   INHERIT_DOC,
   INTERFACE,
+  JSX,
+  JSX_FRAGMENT,
   LENDS,
   LICENSE, // same as preserve
-  LOCALE_FILE,
-  LOCALE_OBJECT,
-  LOCALE_SELECT,
-  LOCALE_VALUE,
+  LOG_TYPE_IN_COMPILER,
   MEANING,
   MIXIN_CLASS,
   MIXIN_FUNCTION,
   MODIFIES,
+  MODS,
+  NG_INJECT,
   NO_COLLAPSE,
   NO_COMPILE,
+  NO_COVERAGE,
+  /**
+   * A tag to suppress clutz's d.ts generation for classes and method. This is specifically for the
+   * use of J2CL.
+   *
+   * <p>Annotating classes, class methods and fields with @nodts has a side effect of not triggering
+   * a hard error on the code which the extended subclass unintentionally reuses the same property
+   * from base class. The author of the code using this tag should be specifically aware of this and
+   * should be able to communicate this to the consumers of their code.
+   */
+  NO_DTS,
   NO_INLINE,
   NO_SIDE_EFFECTS,
   NOT_IMPLEMENTED,
@@ -70,25 +81,32 @@ enum Annotation {
   PRESERVE, // same as license
   PRIVATE,
   PROTECTED,
+  PROVIDE_GOOG, // @provideGoog - appears only in base.js
+  PROVIDE_ALREADY_PROVIDED,
   PUBLIC,
   PURE_OR_BREAK_MY_CODE,
   RETURN,
+  SASS_GENERATED_CSS_TS,
   SEE,
   SOY_MODULE,
   SOY_TEMPLATE,
   STRUCT,
   SUPPRESS,
   TEMPLATE,
+  CLOSURE_UNAWARE_CODE,
   THIS,
   THROWS,
   TYPE,
   TYPEDEF,
   TYPE_SUMMARY,
   UNRESTRICTED,
-  VERSION,
-  WIZACTION;
+  USED_VIA_DOT_CONSTRUCTOR,
+  WIZACTION,
+  TS_TYPE,
+  WIZ_ANALYZER,
+  WIZCALLBACK;
 
-  static final Map<String, Annotation> recognizedAnnotations =
+  static final ImmutableMap<String, Annotation> recognizedAnnotations =
       new ImmutableMap.Builder<String, Annotation>()
           .put("ngInject", Annotation.NG_INJECT)
           .put("abstract", Annotation.ABSTRACT)
@@ -96,6 +114,7 @@ enum Annotation {
           .put("argument", Annotation.PARAM)
           .put("author", Annotation.AUTHOR)
           .put("closurePrimitive", Annotation.CLOSURE_PRIMITIVE)
+          .put("closureUnaware", Annotation.CLOSURE_UNAWARE_CODE)
           .put("const", Annotation.CONSTANT)
           .put("collapsibleOrBreakMyCode", Annotation.COLLAPSIBLE_OR_BREAK_MY_CODE)
           .put("constant", Annotation.CONSTANT)
@@ -106,13 +125,14 @@ enum Annotation {
           .put("deprecated", Annotation.DEPRECATED)
           .put("desc", Annotation.DESC)
           .put("dict", Annotation.DICT)
+          .put("requireInlining", Annotation.REQUIRE_INLINING)
           .put("enum", Annotation.ENUM)
+          .put("enhance", Annotation.ENHANCE)
           .put("export", Annotation.EXPORT)
           .put("extends", Annotation.EXTENDS)
           .put("externs", Annotation.EXTERNS)
           .put("fileoverview", Annotation.FILE_OVERVIEW)
           .put("final", Annotation.FINAL)
-          .put("hidden", Annotation.HIDDEN)
           .put("idGenerator", Annotation.IDGENERATOR)
           .put("implements", Annotation.IMPLEMENTS)
           .put("implicitCast", Annotation.IMPLICIT_CAST)
@@ -121,16 +141,16 @@ enum Annotation {
           .put("record", Annotation.RECORD)
           .put("lends", Annotation.LENDS)
           .put("license", Annotation.LICENSE)
-          .put("localeFile", Annotation.LOCALE_FILE)
-          .put("localeObject", Annotation.LOCALE_OBJECT)
-          .put("localeSelect", Annotation.LOCALE_SELECT)
-          .put("localeValue", Annotation.LOCALE_VALUE)
+          .put("logTypeInCompiler", Annotation.LOG_TYPE_IN_COMPILER)
           .put("meaning", Annotation.MEANING)
           .put("mixinClass", Annotation.MIXIN_CLASS)
           .put("mixinFunction", Annotation.MIXIN_FUNCTION)
           .put("modifies", Annotation.MODIFIES)
+          .put("mods", Annotation.MODS)
           .put("nocollapse", Annotation.NO_COLLAPSE)
           .put("nocompile", Annotation.NO_COMPILE)
+          .put("nocoverage", Annotation.NO_COVERAGE)
+          .put("nodts", Annotation.NO_DTS)
           .put("noinline", Annotation.NO_INLINE)
           .put("nosideeffects", Annotation.NO_SIDE_EFFECTS)
           .put("override", Annotation.OVERRIDE)
@@ -142,10 +162,13 @@ enum Annotation {
           .put("preserve", Annotation.PRESERVE)
           .put("private", Annotation.PRIVATE)
           .put("protected", Annotation.PROTECTED)
+          .put("provideGoog", Annotation.PROVIDE_GOOG)
+          .put("provideAlreadyProvided", Annotation.PROVIDE_ALREADY_PROVIDED)
           .put("public", Annotation.PUBLIC)
           .put("pureOrBreakMyCode", Annotation.PURE_OR_BREAK_MY_CODE)
           .put("return", Annotation.RETURN)
           .put("returns", Annotation.RETURN)
+          .put("sassGeneratedCssTs", Annotation.SASS_GENERATED_CSS_TS)
           .put("see", Annotation.SEE)
           .put("soyModule", Annotation.SOY_MODULE)
           .put("soyTemplate", Annotation.SOY_TEMPLATE)
@@ -158,7 +181,10 @@ enum Annotation {
           .put("typedef", Annotation.TYPEDEF)
           .put("typeSummary", Annotation.TYPE_SUMMARY)
           .put("unrestricted", Annotation.UNRESTRICTED)
-          .put("version", Annotation.VERSION)
+          .put("usedViaDotConstructor", Annotation.USED_VIA_DOT_CONSTRUCTOR)
           .put("wizaction", Annotation.WIZACTION)
-          .build();
+          .put("tsType", Annotation.TS_TYPE)
+          .put("wizAnalyzer", Annotation.WIZ_ANALYZER)
+          .put("wizcallback", Annotation.WIZCALLBACK)
+          .buildOrThrow();
 }

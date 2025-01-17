@@ -16,20 +16,21 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.javascript.jscomp.SourceExcerptProvider.SourceExcerpt.FULL;
 import static com.google.javascript.jscomp.SourceExcerptProvider.SourceExcerpt.LINE;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
 import com.google.common.base.Splitter;
-import com.google.common.base.Strings;
 import com.google.debugging.sourcemap.proto.Mapping.OriginalMapping;
+import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import com.google.javascript.jscomp.SourceExcerptProvider.ExcerptFormatter;
 import com.google.javascript.jscomp.SourceExcerptProvider.SourceExcerpt;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.TokenUtil;
 import java.util.List;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Lightweight message formatter. The format of messages this formatter
@@ -65,11 +66,13 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
     return new LightweightMessageFormatter();
   }
 
+  @CanIgnoreReturnValue
   public LightweightMessageFormatter setIncludeLocation(boolean includeLocation) {
     this.includeLocation = includeLocation;
     return this;
   }
 
+  @CanIgnoreReturnValue
   public LightweightMessageFormatter setIncludeLevel(boolean includeLevel) {
     this.includeLevel = includeLevel;
     return this;
@@ -143,26 +146,41 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
 
   String getExcerptWithPosition(JSError error) {
     return getExcerptWithPosition(
-        error, error.getSourceName(), error.getLineNumber(), error.getCharno(), defaultFormat);
+        error,
+        error.getSourceName(),
+        error.getLineNumber(),
+        error.getCharno(),
+        error.getLength(),
+        defaultFormat);
   }
 
   private String getExcerptWithPosition(
       JSError error, String sourceName, int lineNumber, int charno, SourceExcerpt format) {
+    int nodeLength = error.getLength();
+    return getExcerptWithPosition(error, sourceName, lineNumber, charno, nodeLength, format);
+  }
+
+  private String getExcerptWithPosition(
+      JSError error,
+      String sourceName,
+      int lineNumber,
+      int charno,
+      int length,
+      SourceExcerpt format) {
     StringBuilder b = new StringBuilder();
 
     SourceExcerptProvider source = getSource();
-    int nodeLength = error.getNodeLength();
-    int length = charno >= 0 && nodeLength >= 0 ? charno + nodeLength : -1;
+    int cookedLength = charno >= 0 && length >= 0 ? charno + length : -1;
 
     String sourceExcerpt =
         source == null
             ? null
-            : format.get(source, sourceName, lineNumber, length, excerptFormatter);
+            : format.get(source, sourceName, lineNumber, cookedLength, excerptFormatter);
 
     if (sourceExcerpt != null) {
       if (format.equals(FULL)) {
         if (0 <= charno) {
-          padMultipleLines(charno, sourceExcerpt, b, error.getNode());
+          padMultipleLines(error, charno, sourceExcerpt, b, error.getNode());
         } else {
           b.append(sourceExcerpt);
           b.append('\n');
@@ -174,7 +192,7 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
         // charno == sourceExcerpt.length() means something is missing
         // at the end of the line
         if (format.equals(LINE) && 0 <= charno && charno <= sourceExcerpt.length()) {
-          padLine(charno, sourceExcerpt, b, error.getNodeLength(), error.getNode());
+          padLine(charno, sourceExcerpt, b, length, error.getNode());
         }
       }
     }
@@ -225,12 +243,16 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
    * @param sourceExcerpt the original source, possibly multiple lines separated by '\n'.
    */
   private void padMultipleLines(
-      int startCharno, String sourceExcerpt, StringBuilder b, Node errorNode) {
+      JSError error, int startCharno, String sourceExcerpt, StringBuilder b, Node errorNode) {
     if (errorNode == null) {
       b.append(sourceExcerpt);
       b.append("\n");
       int charWithLineNumberOffset = startCharno + sourceExcerpt.indexOf('|') + 2;
-      padLine(charWithLineNumberOffset, sourceExcerpt, b, -1, errorNode);
+      checkState(
+          charWithLineNumberOffset <= sourceExcerpt.length(),
+          "Cannot format source excerpt; unexpected start character for error:\n %s",
+          error);
+      padLine(charWithLineNumberOffset, sourceExcerpt, b, -1, null);
       return;
     }
     List<String> lines = Splitter.on('\n').splitToList(sourceExcerpt);
@@ -253,6 +275,10 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
       if (shouldPrintLine) {
         b.append(line);
         b.append("\n");
+        checkState(
+            charWithLineNumberOffset <= sourceExcerpt.length(),
+            "Cannot format source excerpt; unexpected start character for error\n%s",
+            error);
         padLine(charWithLineNumberOffset, line, b, remainingLength, errorNode);
       }
 
@@ -280,7 +306,7 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
     }
 
     @Override
-    public String formatRegion(@Nullable Region region) {
+    public @Nullable String formatRegion(@Nullable Region region) {
       if (region == null) {
         return null;
       }
@@ -313,7 +339,7 @@ public final class LightweightMessageFormatter extends AbstractMessageFormatter 
 
         // nice spaces for the line number
         int spaces = numberLength - Integer.toString(lineNumber).length();
-        builder.append(Strings.repeat(" ", spaces));
+        builder.repeat(" ", spaces);
         builder.append(lineNumber);
         builder.append("| ");
 

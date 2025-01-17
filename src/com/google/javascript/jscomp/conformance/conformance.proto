@@ -73,6 +73,13 @@ message Requirement {
     // If you build automation to remove unused entries, you can use this flag
     // to enable/disable it.
     optional bool automatically_prune = 6;
+
+    // Only use this if you have a very good reason. This suppresses a finding
+    // from generated conformance results when it passes and therefore prevents
+    // downstream tooling from inspecting the finding.
+    optional bool
+        do_not_record_violations_in_summary_because_this_is_gencode_and_always_safe =
+            7 [deprecated = true];
   }
 
   // DEPRECATED: Use allowlist_entry instead.
@@ -105,6 +112,10 @@ message Requirement {
 
     // Forbidden dependency (source or generated files) expressed via regexp.
     BANNED_DEPENDENCY_REGEX = 14;
+
+    // Forbidden namespace used by an @enhance annotation. Ban specific
+    // namespaces from being enhanced in the top level comment of a file.
+    BANNED_ENHANCE = 16;
 
     // A forbidden fully distinguished name. For example:
     //  - A global name like "eval" or "goog"
@@ -168,6 +179,15 @@ message Requirement {
     // A restricted write to an instance property.
     // Example: "Element.prototype.innerHTML:!TrustedHTML|string"
     RESTRICTED_PROPERTY_WRITE = 13;
+
+    // A banned string literal or template literal using regular expressions.
+    // This runs against any string literal or template literal node and matches
+    // based on the passed in regular expression value.
+    // example: value: ".*oo.*" in "foobar" would match.
+    BANNED_STRING_REGEX = 17;
+
+    // A banned @mods annotation using regular expressions.
+    BANNED_MODS_REGEX = 18;
   }
 
   enum TypeMatchingStrategy {
@@ -237,7 +257,7 @@ message Requirement {
     // Currently treated the same as WARNING.
     UNSPECIFIED = 0;
     // Allows the build to continue. Can be turned into an error by setting the
-    // jscomp_error=conformanceConfig flag.
+    // jscomp_error=conformanceViolations flag.
     WARNING = 1;
     // The build fails if we are confident this is an error.
     // This causes an error even on possible violations, e.g. when the type
