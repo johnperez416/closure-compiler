@@ -3064,7 +3064,8 @@ public class Compiler extends AbstractCompiler implements ErrorHandler, SourceFi
     if (docInfo == null) {
       return null;
     }
-    return docInfo.getLicense();
+    String license = docInfo.getLicense();
+    return license;
   }
 
   /**
