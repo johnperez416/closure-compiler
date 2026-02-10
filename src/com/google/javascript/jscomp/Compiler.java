@@ -367,8 +367,8 @@ public class Compiler extends AbstractCompiler implements ErrorHandler, SourceFi
                       Feature.OBJECT_DESTRUCTURING,
                       Feature.ARRAY_PATTERN_REST,
                       Feature.DEFAULT_PARAMETERS));
-          // TODO(rishipal): Fall through because of
-          // https://b.corp.google.com/issues/239426154#comment57
+        // TODO(rishipal): Fall through because of
+        // https://b.corp.google.com/issues/239426154#comment57
         case CLASS:
           options.setOutputFeatureSet(
               options
@@ -2111,8 +2111,7 @@ public class Compiler extends AbstractCompiler implements ErrorHandler, SourceFi
    *
    * @return A synthetic root node whose two children are the externs root and the main root
    */
-  @Nullable
-  Node parseInputs() {
+  @Nullable Node parseInputs() {
     boolean devMode = options.getDevMode() != DevMode.OFF;
 
     // If old roots exist (we are parsing a second time), detach each of the
@@ -2365,7 +2364,7 @@ public class Compiler extends AbstractCompiler implements ErrorHandler, SourceFi
     for (CompilerInput entryPoint : entryPoints) {
       findModulesFromInput(
           entryPoint,
-          /* wasImportedByModule = */ false,
+          /* wasImportedByModule= */ false,
           workingInputSet,
           inputsByIdentifier,
           inputsByProvide,
@@ -4440,8 +4439,7 @@ public class Compiler extends AbstractCompiler implements ErrorHandler, SourceFi
 
   /** Returns the module type for the provided namespace. */
   @Override
-  @Nullable
-  ModuleType getModuleTypeByName(String moduleName) {
+  @Nullable ModuleType getModuleTypeByName(String moduleName) {
     return moduleTypesByName.get(moduleName);
   }
 
