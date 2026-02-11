@@ -337,4 +337,28 @@ class __PRIVATE_WebChannelConnection extends CLASS_EXTENDS$0 {
         class C extends CLASS_EXTENDS$0 {}
         """);
   }
+
+  @Test
+  public void testNestedClassInExtends_withAnotherExtends() {
+    // Regression test for b/483475275.
+    // Disable typechecking: this was seen in real-world code not written for the Closure Compiler,
+    // and the typechecker will emit an error. That's fine, we just want to test transpilation.
+    disableTypeCheck();
+    disableTypeInfoValidation();
+
+    test(
+        """
+        new (class extends (class extends boo() {}) {});
+        """,
+        // TODO - b/483475275: extract "boo()" in "class extends boo()" to a separate statement.
+        // Currently the normalize pass skips over "class extends boo() {}" in its traversal because
+        // of issues with pre-order rewriting of the enclosing class.
+        """
+        new ((() => {
+          const CLASS_EXTENDS$0 = class extends boo() {};
+          const CLASS_DECL$1 = class extends CLASS_EXTENDS$0 {};
+          return CLASS_DECL$1;
+        })())();
+        """);
+  }
 }
