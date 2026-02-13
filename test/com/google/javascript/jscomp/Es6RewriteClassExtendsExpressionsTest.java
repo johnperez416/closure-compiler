@@ -111,32 +111,38 @@ public final class Es6RewriteClassExtendsExpressionsTest extends CompilerTestCas
   @Test
   public void testClassExtendsClassTranspilation() {
     String code =
-"""
-class __PRIVATE_WebChannelConnection extends class __PRIVATE_RestConnection {
-  constructor(e) {
-    this.databaseInfo = e, this.databaseId = e.databaseId;
-  }
-} {
-  constructor(e) {
-    super(e), this.forceLongPolling = e.forceLongPolling, this.autoDetectLongPolling = e.autoDetectLongPolling, this.useFetchStreams = e.useFetchStreams, this.longPollingOptions = e.longPollingOptions;
-    console.log('test');
-  }
-}
-""";
+        """
+        class __PRIVATE_WebChannelConnection extends class __PRIVATE_RestConnection {
+          constructor(e) {
+            this.databaseInfo = e, this.databaseId = e.databaseId;
+          }
+        } {
+          constructor(e) {
+            super(e), this.forceLongPolling = e.forceLongPolling, this.autoDetectLongPolling = e.autoDetectLongPolling, this.useFetchStreams = e.useFetchStreams, this.longPollingOptions = e.longPollingOptions;
+            console.log('test');
+          }
+        }
+        """;
     String expectedCode =
-"""
-const CLASS_EXTENDS$0 = class {
-  constructor(e) {
-    this.databaseInfo = e, this.databaseId = e.databaseId;
-  }
-};
-class __PRIVATE_WebChannelConnection extends CLASS_EXTENDS$0 {
-  constructor(e) {
-    super(e), this.forceLongPolling = e.forceLongPolling, this.autoDetectLongPolling = e.autoDetectLongPolling, this.useFetchStreams = e.useFetchStreams, this.longPollingOptions = e.longPollingOptions;
-    console.log('test');
-  }
-}
-""";
+        // The transpilation is somewhat unnecessarily complicated - we don't need to wrap the
+        // extended class in an arrow function - but this is an artifact of the current
+        // implementation.
+        """
+        const CLASS_EXTENDS$0 = (() => {
+          const CLASS_DECL$1 = class {
+            constructor(e) {
+              this.databaseInfo = e, this.databaseId = e.databaseId;
+            }
+          };
+          return CLASS_DECL$1;
+        })();
+        class __PRIVATE_WebChannelConnection extends CLASS_EXTENDS$0 {
+          constructor(e) {
+            super(e), this.forceLongPolling = e.forceLongPolling, this.autoDetectLongPolling = e.autoDetectLongPolling, this.useFetchStreams = e.useFetchStreams, this.longPollingOptions = e.longPollingOptions;
+            console.log('test');
+          }
+        }
+        """;
     test(code, expectedCode);
   }
 
@@ -350,12 +356,13 @@ class __PRIVATE_WebChannelConnection extends CLASS_EXTENDS$0 {
         """
         new (class extends (class extends boo() {}) {});
         """,
-        // TODO - b/483475275: extract "boo()" in "class extends boo()" to a separate statement.
-        // Currently the normalize pass skips over "class extends boo() {}" in its traversal because
-        // of issues with pre-order rewriting of the enclosing class.
         """
         new ((() => {
-          const CLASS_EXTENDS$0 = class extends boo() {};
+          const CLASS_EXTENDS$0 = (() => {
+            const CLASS_EXTENDS$2 = boo();
+            const CLASS_DECL$3 = class extends CLASS_EXTENDS$2 {};
+            return CLASS_DECL$3;
+          })();
           const CLASS_DECL$1 = class extends CLASS_EXTENDS$0 {};
           return CLASS_DECL$1;
         })())();
